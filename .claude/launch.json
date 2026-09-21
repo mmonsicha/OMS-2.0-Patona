@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "patona-static",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/montira/Desktop/KWANG/Patona 2/.claude/static-server.js"],
+      "port": 8934
+    }
+  ]
+}

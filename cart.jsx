@@ -1,0 +1,1472 @@
+// cart.jsx — Right pane: channel selector, customer row, line items, totals,
+// payment methods, big Charge CTA. Plain React + CSS tokens.
+
+const cartStyles = {
+  pane: {
+    width: 480,
+    flexShrink: 0,
+    background: 'var(--bg-surface)',
+    borderLeft: '1px solid var(--stroke)',
+    display: 'flex', flexDirection: 'column',
+    // NOT overflow:hidden — popovers (shipping info, address selector,
+    // customer picker) are absolutely positioned relative to a trigger that
+    // can sit close to the pane's own bottom edge (little room left below
+    // it), and clipping here cut them off along with their own internal
+    // scroll list, making long option lists (e.g. couriers) unreachable.
+    minHeight: 0, overflow: 'visible',
+  },
+  paneCompact: { width: 420 },
+  paneRoomy:   { width: 540 },
+
+  // Head + item list now share ONE scroll container (see `scrollRegion`
+  // below) so the collapsible head's height never fights with the item
+  // list's own scroll math — that mismatch was the root cause of the header
+  // getting stuck collapsed (scrolling back to top could stop firing scroll
+  // events once the freed-up space removed all overflow from a separately
+  // scrolling item list).
+  scrollRegion: {
+    flex: 1, minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex', flexDirection: 'column',
+  },
+  head: {
+    padding: '8px var(--d-pad-page) 6px',
+    display: 'flex', flexDirection: 'column',
+    borderBottom: '1px solid var(--stroke)',
+    flexShrink: 0,
+  },
+  channelBlock: { display: 'flex', flexDirection: 'column', gap: 8 },
+  // Sub-channel + fulfillment side by side (Online/LINK_BILL) — each dropdown
+  // gets equal width, matching the Figma "wrap" row of two Selection Dropdowns.
+  dropdownRow: { display: 'flex', gap: 8, width: '100%' },
+  divider: { height: 1, background: 'var(--stroke)', width: '100%', flexShrink: 0 },
+  formBlock: { display: 'flex', flexDirection: 'column', gap: 8 },
+  formLabel: { fontSize: 'var(--fs-h3)', fontWeight: 500, color: 'var(--text-primary)' },
+  requiredMark: { color: 'var(--rose-500)' },
+
+  // ── Customer card (once a real customer is attached) — name/phone/email,
+  // a "นำออก" remove link, and (when the order needs one) a nested address
+  // selector styled as a dropdown-input with a primary/secondary badge. ──
+  customerCard: {
+    width: '100%',
+    display: 'flex', flexDirection: 'column', gap: 8,
+    border: '1px solid var(--stroke)',
+    background: 'var(--bg-surface)',
+    borderRadius: 'var(--d-radius)',
+    padding: '10px 16px',
+  },
+  customerCardTop: { display: 'flex', alignItems: 'flex-start', gap: 8 },
+  customerCardBody: {
+    flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2,
+    cursor: 'pointer',
+  },
+  customerCardName: {
+    fontSize: 'var(--fs-h4)', fontWeight: 600, color: 'var(--text-primary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  customerCardMeta: {
+    fontSize: 'var(--fs-body-sm)', color: 'var(--text-secondary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  customerCardRemove: {
+    appearance: 'none', border: 0, background: 'transparent',
+    color: 'var(--sky-600)', fontSize: 'var(--fs-body-sm)', fontWeight: 500,
+    fontFamily: 'inherit', cursor: 'pointer', flexShrink: 0,
+    padding: '2px 0',
+  },
+  addrField: {
+    width: '100%',
+    appearance: 'none',
+    border: '1px solid var(--stroke)',
+    background: 'var(--bg-surface)',
+    borderRadius: 'var(--d-radius)',
+    padding: '6px 12px',
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
+    minHeight: 40,
+  },
+  addrBadge: (primary) => ({
+    flexShrink: 0,
+    padding: '2px 8px',
+    borderRadius: 999,
+    fontSize: 11, fontWeight: 600,
+    background: primary ? 'var(--emerald-50)' : 'var(--bg-subtle)',
+    color: primary ? 'var(--emerald-700)' : 'var(--text-secondary)',
+    border: `1px solid ${primary ? '#D1FAE5' : 'var(--stroke)'}`,
+  }),
+  addrFieldText: {
+    flex: 1, minWidth: 0,
+    fontSize: 'var(--fs-body)', color: 'var(--text-primary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  addrFieldPlaceholder: { color: 'var(--rose-500)', fontWeight: 500 },
+  shipFeeInput: {
+    width: '100%',
+    appearance: 'none',
+    border: '1px solid var(--stroke)',
+    background: 'var(--bg-surface)',
+    borderRadius: 'var(--d-radius-sm)',
+    padding: '8px 10px',
+    fontFamily: 'inherit', fontSize: 'var(--fs-body-lg)',
+    color: 'var(--text-primary)',
+    marginBottom: 4,
+    outline: 'none',
+  },
+
+  // ── Split shipment — multiple ship groups under one order/channel, each
+  // with its own address + courier + fee, paid together in one summary. ──
+  shipGroupsHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+  },
+  splitBtn: {
+    appearance: 'none', border: 0, background: 'transparent',
+    color: 'var(--brand-600)', fontSize: 'var(--fs-body-sm)', fontWeight: 600,
+    fontFamily: 'inherit', cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '2px 0',
+  },
+  // `dragOver` highlights the card as a valid drop target while an item is
+  // being dragged over it — no more "active group" concept to style here.
+  shipGroupCard: (dragOver) => ({
+    display: 'flex', flexDirection: 'column', gap: 8,
+    border: `1.5px dashed ${dragOver ? 'var(--brand-500)' : 'transparent'}`,
+    outline: dragOver ? 'none' : '1px solid var(--stroke)',
+    background: dragOver ? 'var(--brand-50)' : 'var(--bg-muted)',
+    borderRadius: 'var(--d-radius)',
+    padding: '10px 12px',
+    transition: 'border-color .12s, background .12s',
+  }),
+  shipGroupHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  shipGroupLabel: { fontWeight: 600, fontSize: 'var(--fs-body)', color: 'var(--text-primary)', flex: 1, minWidth: 0 },
+  shipGroupCount: { fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)' },
+  shipGroupRemove: {
+    appearance: 'none', border: 0, background: 'transparent',
+    color: 'var(--rose-500)', cursor: 'pointer', flexShrink: 0,
+    display: 'flex', padding: 2,
+  },
+
+  // Main-pane summary card — read-only overview (count, fulfillment,
+  // courier/fee, total) with delete + "manage" (chevron) as the only
+  // actions. Cards get breathing room from each other via `items`' gap.
+  shipGroupSummaryCard: {
+    width: '100%',
+    border: '1px solid var(--stroke)',
+    background: 'var(--bg-surface)',
+    borderRadius: 'var(--d-radius)',
+    padding: '12px 14px',
+    display: 'flex', flexDirection: 'column', gap: 8,
+  },
+  shipGroupSummaryTop: { display: 'flex', alignItems: 'center', gap: 4 },
+  shipGroupSummaryOpen: {
+    appearance: 'none', border: 0, background: 'transparent',
+    display: 'flex', padding: 4, cursor: 'pointer', flexShrink: 0,
+  },
+  shipGroupSummaryBadges: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  shipGroupSummaryBadge: {
+    fontSize: 11, fontWeight: 600,
+    color: 'var(--text-secondary)',
+    background: 'var(--bg-subtle)',
+    borderRadius: 999, padding: '3px 9px',
+    flexShrink: 0, whiteSpace: 'nowrap',
+  },
+  shipGroupFulfillBadge: {
+    fontSize: 11, fontWeight: 600,
+    color: 'var(--sky-700)',
+    background: 'var(--sky-50)',
+    border: '1px solid #BAE0FD',
+    borderRadius: 999, padding: '3px 9px',
+    flexShrink: 0, whiteSpace: 'nowrap',
+    overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220,
+  },
+  shipGroupSummaryMeta: {
+    fontSize: 'var(--fs-caption)', color: 'var(--text-secondary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  shipGroupSummaryTotal: {
+    display: 'flex', justifyContent: 'space-between',
+    fontSize: 'var(--fs-body-sm)', fontWeight: 600,
+    color: 'var(--text-primary)',
+    paddingTop: 6,
+    borderTop: '1px dashed var(--stroke)',
+  },
+  shipGroupSummaryList: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 },
+
+  // Group-management drawer — slides in from the right, no scrim: the
+  // product grid must stay tappable while it's open (that's the point of
+  // "pick a group, then shop into it").
+  drawer: (visible) => ({
+    position: 'fixed', top: 0, right: 0, bottom: 0,
+    width: 'min(440px, 92vw)',
+    background: 'var(--bg-surface)',
+    borderLeft: '1px solid var(--stroke)',
+    boxShadow: '-8px 0 24px rgba(15,23,42,.18)',
+    zIndex: 150,
+    display: 'flex', flexDirection: 'column',
+    transform: visible ? 'translateX(0)' : 'translateX(100%)',
+    transition: 'transform .22s cubic-bezier(.32,.72,0,1)',
+  }),
+  drawerHead: {
+    display: 'flex', alignItems: 'center', gap: 12,
+    padding: '16px 20px',
+    borderBottom: '1px solid var(--stroke)',
+    flexShrink: 0,
+  },
+  drawerTitle: { flex: 1, fontSize: 'var(--fs-h4)', fontWeight: 700, color: 'var(--text-primary)' },
+  drawerClose: {
+    appearance: 'none', border: 0, background: 'transparent',
+    width: 32, height: 32, borderRadius: 8,
+    display: 'grid', placeItems: 'center',
+    color: 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0,
+  },
+  drawerBody: {
+    flex: 1, minHeight: 0, overflowY: 'auto',
+    padding: 20,
+    display: 'flex', flexDirection: 'column', gap: 12,
+  },
+
+  shipGroupItems: {
+    display: 'flex', flexDirection: 'column',
+    borderTop: '1px dashed var(--stroke-strong)',
+    marginTop: 2,
+  },
+  shipGroupItemsEmpty: {
+    fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)', fontStyle: 'italic',
+    padding: '10px 0 2px',
+  },
+
+  infoRow: (disabled) => ({
+    width: '100%',
+    appearance: 'none',
+    border: '1px solid var(--stroke)',
+    background: 'var(--bg-surface)',
+    borderRadius: 'var(--d-radius)',
+    minHeight: 36,
+    padding: '8px 16px',
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontFamily: 'inherit',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? .5 : 1,
+    textAlign: 'left',
+  }),
+  infoRowIcon: { color: 'var(--text-secondary)', flexShrink: 0, display: 'flex' },
+  infoRowLabel: {
+    flex: 1, minWidth: 0,
+    fontSize: 'var(--fs-body-lg)', color: 'var(--text-primary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  infoRowChev: { color: 'var(--text-tertiary)', flexShrink: 0, display: 'flex' },
+  ddRow: {
+    width: '100%',
+    appearance: 'none',
+    border: '1px solid var(--stroke)',
+    background: 'var(--bg-surface)',
+    borderRadius: 'var(--d-radius)',
+    minHeight: 36,
+    padding: '8px 16px',
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+
+  // ── Collapsible head — tap (or scroll the cart list) to focus on items.
+  // Tablet-first: the channel/fulfillment/customer/address stack takes real
+  // estate the item list needs once an order has a few lines, so it folds
+  // to a one-line summary and springs back open when scrolled to the top. ──
+  headToggle: {
+    width: '100%',
+    appearance: 'none', border: 0, background: 'transparent',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    padding: '2px 2px 8px',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  headToggleSummary: {
+    flex: 1, minWidth: 0, textAlign: 'left',
+    fontSize: 'var(--fs-body-sm)', fontWeight: 600,
+    color: 'var(--text-secondary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  headToggleChev: (open) => ({
+    color: 'var(--text-tertiary)',
+    transform: open ? 'rotate(180deg)' : 'rotate(0)',
+    transition: 'transform .15s ease',
+    display: 'inline-flex', flexShrink: 0,
+  }),
+  headDetail: (open) => ({
+    display: 'flex', flexDirection: 'column', gap: 12,
+    maxHeight: open ? 640 : 0,
+    opacity: open ? 1 : 0,
+    // Only clip while collapsed — an open header must let its popovers
+    // (fulfillment/sub-channel/customer/address) escape past its own box,
+    // otherwise they get sliced off by the collapse animation's overflow.
+    overflow: open ? 'visible' : 'hidden',
+    transition: 'max-height .2s ease, opacity .15s ease',
+  }),
+
+  // ── Segmented control (used only for the Channel row in expanded mode) ──
+  segGroup: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: 4,
+    padding: 4,
+    background: 'var(--bg-subtle)',
+    borderRadius: 'var(--d-radius)',
+    width: '100%',
+  },
+  segTab: (active) => ({
+    appearance: 'none',
+    border: 0,
+    background: active ? 'var(--bg-surface)' : 'transparent',
+    color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+    fontWeight: active ? 600 : 500,
+    fontSize: 13,
+    padding: '8px 6px',
+    minHeight: 36,
+    borderRadius: 6,
+    boxShadow: active ? 'var(--shadow-sm)' : 'none',
+    transition: 'background .12s, color .12s, box-shadow .12s',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    minWidth: 0,
+  }),
+  segLabel: {
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+
+  // Popover that hangs off a pill
+  popWrap: { position: 'relative', minWidth: 0 },
+  popScrim: { position: 'fixed', inset: 0, zIndex: 39 },
+  pop: {
+    position: 'absolute',
+    top: 'calc(100% + 6px)',
+    left: 0,
+    right: 0,
+    maxHeight: 280,
+    overflowY: 'auto',
+    background: 'var(--bg-surface)',
+    border: '1px solid var(--stroke)',
+    borderRadius: 'var(--d-radius-lg)',
+    boxShadow: 'var(--shadow-lg)',
+    padding: 6,
+    zIndex: 40,
+    display: 'flex', flexDirection: 'column', gap: 2,
+  },
+  popHd: {
+    fontSize: 10, fontWeight: 700,
+    letterSpacing: '.08em', textTransform: 'uppercase',
+    color: 'var(--text-tertiary)',
+    padding: '8px 10px 4px',
+  },
+  popItem: (active) => ({
+    appearance: 'none', border: 0,
+    background: active ? 'var(--brand-50)' : 'transparent',
+    borderRadius: 8,
+    padding: '8px 10px',
+    display: 'flex', alignItems: 'center', gap: 10,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    textAlign: 'left',
+    width: '100%',
+    transition: 'background .1s',
+  }),
+  popItemIcon: (color, active) => ({
+    width: 26, height: 26, borderRadius: 7,
+    background: color || (active ? 'var(--brand-500)' : 'var(--bg-subtle)'),
+    color: color || active ? '#fff' : 'var(--text-secondary)',
+    display: 'grid', placeItems: 'center',
+    flexShrink: 0,
+    fontWeight: 700, fontSize: 11,
+    boxShadow: color ? 'inset 0 1px 0 rgba(255,255,255,.25)' : 'none',
+  }),
+  popItemBody: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
+  popItemLabel: { fontWeight: 600, color: 'var(--text-primary)', fontSize: 'var(--fs-body)' },
+  popItemSub: { fontSize: 11, color: 'var(--text-tertiary)' },
+  popCheck: {
+    width: 20, height: 20, borderRadius: '50%',
+    background: 'var(--brand-500)', color: '#fff',
+    display: 'grid', placeItems: 'center', flexShrink: 0,
+  },
+
+  items: {
+    padding: '4px var(--d-pad-page)',
+    display: 'flex', flexDirection: 'column', gap: 0,
+  },
+  empty: {
+    flex: 1, display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center',
+    color: 'var(--text-tertiary)', gap: 10, padding: '32px 20px', textAlign: 'center',
+  },
+  emptyIcon: {
+    width: 56, height: 56, borderRadius: '50%',
+    background: 'var(--bg-subtle)',
+    display: 'grid', placeItems: 'center',
+  },
+
+  row: {
+    display: 'grid',
+    gridTemplateColumns: '36px 1fr auto',
+    gap: 10,
+    padding: '10px 0',
+    borderBottom: '1px solid var(--stroke)',
+    alignItems: 'center',
+  },
+  rowSwatch: (color) => ({
+    width: 36, height: 36,
+    borderRadius: 'var(--d-radius-sm)',
+    background: color,
+    display: 'grid', placeItems: 'center',
+    color: 'rgba(255,255,255,.95)', fontWeight: 700,
+    fontSize: 12,
+    textShadow: '0 1px 2px rgba(0,0,0,.2)',
+    flexShrink: 0,
+  }),
+  rowInfo: { display: 'flex', flexDirection: 'column', minWidth: 0, gap: 2 },
+  rowName: {
+    fontSize: 'var(--fs-body)', fontWeight: 600, color: 'var(--text-primary)',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  rowLine: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)',
+  },
+  rowPrice: {
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'flex-end', gap: 6,
+  },
+  rowTotal: { fontWeight: 700, color: 'var(--text-primary)', fontSize: 'var(--fs-body-lg)' },
+  qtyGroup: {
+    display: 'inline-flex', alignItems: 'center',
+    border: '1px solid var(--stroke)',
+    borderRadius: 999, overflow: 'hidden',
+    background: 'var(--bg-surface)',
+  },
+  qtyBtn: {
+    appearance: 'none', border: 0,
+    width: 34, height: 34,
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    display: 'grid', placeItems: 'center',
+  },
+  qtyVal: {
+    minWidth: 26, textAlign: 'center',
+    fontVariantNumeric: 'tabular-nums', fontWeight: 600,
+    fontSize: 'var(--fs-body)', color: 'var(--text-primary)',
+  },
+
+  extras: {
+    display: 'flex', gap: 6,
+    padding: '8px var(--d-pad-page)',
+    borderTop: '1px solid var(--stroke)',
+    flexShrink: 0,
+  },
+  extraBtn: {
+    appearance: 'none', flex: 1,
+    background: 'var(--bg-surface)',
+    border: '1px dashed var(--stroke-strong)',
+    borderRadius: 'var(--d-radius)',
+    padding: '8px',
+    color: 'var(--text-secondary)',
+    display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center',
+    fontFamily: 'inherit', fontSize: 'var(--fs-body)', fontWeight: 500,
+    cursor: 'pointer',
+  },
+  // Applied-state chip (replaces the dashed button when value is set)
+  extraChip: {
+    flex: 1, minWidth: 0,
+    background: 'var(--brand-50)',
+    border: '1px solid var(--brand-300)',
+    borderRadius: 'var(--d-radius)',
+    padding: '6px 8px 6px 8px',
+    display: 'flex', alignItems: 'center', gap: 8,
+    overflow: 'hidden',
+  },
+  extraChipIcon: {
+    width: 24, height: 24, borderRadius: 6,
+    background: 'var(--brand-500)',
+    color: '#fff',
+    display: 'grid', placeItems: 'center',
+    flexShrink: 0,
+  },
+  extraChipBody: {
+    flex: 1, minWidth: 0,
+    display: 'flex', flexDirection: 'column',
+    lineHeight: 1.2,
+    cursor: 'pointer',
+  },
+  extraChipLabel: {
+    fontSize: 'var(--fs-caption)',
+    fontWeight: 700,
+    color: 'var(--brand-700)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  extraChipSub: {
+    fontSize: 11,
+    color: 'var(--brand-700)',
+    opacity: .8,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  extraChipX: {
+    appearance: 'none', border: 0,
+    background: 'transparent',
+    width: 22, height: 22, borderRadius: '50%',
+    display: 'grid', placeItems: 'center',
+    color: 'var(--brand-700)',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+
+  totals: {
+    padding: '6px var(--d-pad-page) 8px',
+    borderTop: '1px solid var(--stroke)',
+    background: 'var(--bg-muted)',
+    display: 'flex', flexDirection: 'column', gap: 2,
+    flexShrink: 0,
+  },
+  totalSub: {
+    display: 'flex', justifyContent: 'space-between',
+    color: 'var(--text-tertiary)', fontSize: 'var(--fs-caption)',
+  },
+  totalRow: {
+    display: 'flex', justifyContent: 'space-between',
+    color: 'var(--text-secondary)', fontSize: 'var(--fs-body-sm)',
+  },
+  totalDisc: { color: 'var(--emerald-700)' },
+  grandRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+    paddingTop: 4, marginTop: 2,
+    borderTop: '1px dashed var(--stroke-strong)',
+  },
+  grandLbl: { fontWeight: 700, color: 'var(--text-primary)', fontSize: 'var(--fs-body-lg)' },
+  grandVal: { fontWeight: 700, color: 'var(--text-primary)', fontSize: 'var(--fs-h3)' },
+
+  payments: {
+    padding: '8px var(--d-pad-page)',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(78px, 1fr))', gap: 6,
+    flexShrink: 0,
+  },
+  pay: (active) => ({
+    appearance: 'none',
+    border: `1.5px solid ${active ? 'var(--brand-500)' : 'var(--stroke)'}`,
+    background: active ? 'var(--brand-50)' : 'var(--bg-surface)',
+    color: active ? 'var(--brand-700)' : 'var(--text-secondary)',
+    borderRadius: 'var(--d-radius)',
+    padding: '8px 6px',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+    minHeight: 54,
+    fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+    boxShadow: active ? '0 0 0 3px color-mix(in srgb, var(--brand-500) 16%, transparent)' : 'none',
+    transition: 'border-color .12s, box-shadow .12s',
+  }),
+
+  action: { padding: 'var(--d-pad-page)', paddingTop: 6, flexShrink: 0 },
+  charge: (disabled) => ({
+    appearance: 'none',
+    width: '100%',
+    height: 48,
+    borderRadius: 'var(--d-radius)',
+    border: 0,
+    background: disabled ? 'var(--bg-subtle)' : 'var(--brand-500)',
+    color: disabled ? 'var(--text-tertiary)' : '#fff',
+    fontFamily: 'inherit',
+    fontSize: 'var(--fs-h3)',
+    fontWeight: 700,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '0 20px',
+    transition: 'background .15s, transform .08s',
+    boxShadow: disabled ? 'none' : '0 4px 14px -2px color-mix(in srgb, var(--brand-500) 45%, transparent)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  }),
+  chargeKey: {
+    fontSize: 12, fontWeight: 600,
+    padding: '2px 8px',
+    background: 'rgba(255,255,255,.18)',
+    borderRadius: 4,
+  },
+};
+
+// Every popover in this file (fulfillment, sub-channel, customer picker,
+// address selector, shipping info) is absolutely positioned under a trigger
+// that can sit anywhere down a long, scrollable cart pane — the pane and its
+// ancestors clip overflow, so a popover that would extend past whatever room
+// is left below its trigger got silently cut off, taking its own internal
+// scroll list down with it (list still there, just invisible/unreachable —
+// looked like "can't scroll" because scrolling revealed nothing new).
+// This measures the actual space above/below the trigger when it opens and
+// flips the popover upward + caps its height to whatever truly fits, so the
+// whole thing (including its list) always renders fully on screen.
+// Shared by the group summary (main pane) and each ShipGroupCard (drawer) so
+// the "does this group need an address / a courier" rule lives in one place.
+// A service item is always an on-site visit regardless of the fulfillment
+// picked; an all-digital group never needs an address; otherwise it follows
+// straight from the group's own selected fulfillment option.
+function groupFulfillmentNeeds(fulfillmentOptions, group, items) {
+  const fulfillment = fulfillmentOptions.find(f => f.id === group.fulfillmentId) || fulfillmentOptions[0];
+  const hasService = items.some(i => i.cat === 'service');
+  const allDigital = items.length > 0 && items.every(i => i.cat === 'digital');
+  const needsAddress = !allDigital && (hasService || fulfillment.needsAddress);
+  const needsCourier = needsAddress && fulfillment.needsCourier;
+  return { fulfillment, needsAddress, needsCourier };
+}
+
+function usePopoverFit(open) {
+  const anchorRef = React.useRef(null);
+  const [placement, setPlacement] = React.useState(null);
+  React.useLayoutEffect(() => {
+    if (!open || !anchorRef.current) { setPlacement(null); return; }
+    const rect = anchorRef.current.getBoundingClientRect();
+    const margin = 12;
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    const openUp = spaceBelow < 160 && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(120, Math.min(280, openUp ? spaceAbove : spaceBelow));
+    // `position: fixed` (viewport-relative, computed from the trigger's own
+    // rect) instead of `absolute` (relative to the trigger, clipped by
+    // whichever scrollable ancestor's box it sits inside) — the cart's own
+    // scroll region has `overflow-y: auto` for its OWN scrolling, which was
+    // silently clipping any popover that opened low in the pane (shipping
+    // info, address selector) along with its internal option list, making
+    // it look like the list couldn't be scrolled to.
+    setPlacement({
+      position: 'fixed',
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+      ...(openUp
+        ? { top: 'auto', bottom: window.innerHeight - rect.top + 6 }
+        : { top: rect.bottom + 6, bottom: 'auto' }),
+    });
+  }, [open]);
+  return { anchorRef, popStyle: placement ? { ...cartStyles.pop, ...placement } : cartStyles.pop };
+}
+
+function Cart({
+  density, channels, channel, setChannel,
+  fulfillment, setFulfillment,
+  subChannel, setSubChannel,
+  payment, setPayment, paymentMethods,
+  cart, setQty, removeItem, customer, customers, setCustomer,
+  addresses,
+  phone, setPhone,
+  subtotal, vat, discount, total,
+  selectorPattern, hideChannelHeader,
+  onCheckout,
+  memberDiscount, manualDiscount, orderNote,
+  onOpenDiscount, onOpenNote, onRemoveDiscount, onRemoveNote,
+  couriers, shipGroups, groupOrderMode, enableGroupOrderMode,
+  addShipGroup, removeShipGroup, setGroupField, setItemGroup,
+  activeGroupId, setActiveGroupId,
+}) {
+  const ch = channels.find(c => c.id === channel);
+  const paneStyle = {
+    ...cartStyles.pane,
+    ...(density === 'compact' ? cartStyles.paneCompact : {}),
+    ...(density === 'comfortable' ? cartStyles.paneRoomy : {}),
+  };
+
+  const scrollRef = React.useRef(null);
+  const isWalkIn = customer.name === 'Walk-in customer';
+  const currentFulfillment = ch.fulfillment.find(f => f.id === fulfillment);
+
+  // Service items are on-site visits — always need a customer + address,
+  // whatever channel/fulfillment is picked. Digital items ship over the
+  // internet — never need an address, unless something else in the same
+  // cart does (a mixed cart still needs one).
+  const hasService = cart.some(i => i.cat === 'service');
+  const hasDigitalOnly = cart.length > 0 && cart.every(i => i.cat === 'digital');
+  const requiresAddress = !hasDigitalOnly && (hasService || currentFulfillment.needsAddress);
+  const customerRequired = channel !== 'POS' || hasService;
+
+  // The channel/fulfillment/customer/address stack folds to a one-line
+  // summary — tap it to collapse/expand — so tablet screens can give the
+  // item list more room. This used to also auto-collapse/expand from the
+  // shared scroll position, but split shipment can make the head itself
+  // taller than the viewport (one card per ship group): scrolling down to
+  // read a second group's card tripped the "scrolled down" threshold, which
+  // collapsed the head and yanked the scroll position back — hiding the very
+  // content being scrolled to. Manual tap only, no scroll-linked auto-toggle.
+  const [formOpen, setFormOpen] = React.useState(true);
+  const [groupDrawerOpen, setGroupDrawerOpen] = React.useState(false);
+
+  const summaryBits = [
+    !hideChannelHeader && ch.label,
+    !hideChannelHeader && currentFulfillment && currentFulfillment.label,
+    isWalkIn ? 'ยังไม่ระบุลูกค้า' : customer.name,
+  ].filter(Boolean);
+
+  // One cart line — shared by the flat list (no group order) and the
+  // per-group sections (group order mode) so the row markup exists in
+  // exactly one place. Draggable in group mode so it can be dropped onto
+  // another group's card in the drawer, instead of a numbered chip picker.
+  const renderCartRow = (item) => {
+    const lineTotal = item.price * item.qty;
+    const initials = item.name.split(' ').slice(0, 2).map(s => s[0]).join('').toUpperCase();
+    return (
+      <div
+        key={item.id}
+        style={cartStyles.row}
+        draggable={groupOrderMode}
+        onDragStart={groupOrderMode ? (e) => e.dataTransfer.setData('text/plain', item.id) : undefined}
+      >
+        <div style={cartStyles.rowSwatch(item.swatch)}>{initials}</div>
+        <div style={cartStyles.rowInfo}>
+          <span style={cartStyles.rowName}>{item.name}</span>
+          <div style={cartStyles.rowLine}>
+            <span>฿{item.price.toLocaleString()}</span>
+            <span>·</span>
+            <span style={{ fontFamily: 'ui-monospace, monospace' }}>{item.sku}</span>
+          </div>
+        </div>
+        <div style={cartStyles.rowPrice}>
+          <span style={cartStyles.rowTotal}>฿{lineTotal.toLocaleString()}</span>
+          <div style={cartStyles.qtyGroup}>
+            <button style={cartStyles.qtyBtn} onClick={() => setQty(item.id, item.qty - 1)}>
+              <Icon name={item.qty === 1 ? 'x' : 'minus'} size={14} />
+            </button>
+            <span style={cartStyles.qtyVal}>{item.qty}</span>
+            <button style={cartStyles.qtyBtn} onClick={() => setQty(item.id, item.qty + 1)}>
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={paneStyle}>
+      <div ref={scrollRef} className="scroll-y" style={cartStyles.scrollRegion}>
+      <div style={cartStyles.head}>
+        <button
+          style={cartStyles.headToggle}
+          onClick={() => setFormOpen(o => !o)}
+          aria-expanded={formOpen}
+        >
+          <span style={cartStyles.headToggleSummary}>{summaryBits.join(' · ')}</span>
+          <span style={cartStyles.headToggleChev(formOpen)}><Icon name="chevD" size={16} /></span>
+        </button>
+
+        <div key={formOpen} style={cartStyles.headDetail(formOpen)}>
+          {!hideChannelHeader && (
+            <div style={cartStyles.channelBlock}>
+              <ChannelTabsFixed channels={channels} channel={channel} onSelect={setChannel} />
+              {/* Once a group order is active, fulfillment is picked per
+                  group (see below) instead of once for the whole order —
+                  this global dropdown would just be redundant/misleading. */}
+              {groupOrderMode ? (
+                ch.subChannels && (
+                  <SubChannelDropdown
+                    options={ch.subChannels}
+                    value={subChannel}
+                    onSelect={setSubChannel}
+                    label={channel === 'LINK_BILL' ? 'Send via' : 'Source'}
+                  />
+                )
+              ) : ch.subChannels ? (
+                // Online/LINK_BILL: sub-channel + fulfillment side by side —
+                // matches Figma's two-column "Selection Dropdown" row.
+                <div style={cartStyles.dropdownRow}>
+                  <SubChannelDropdown
+                    options={ch.subChannels}
+                    value={subChannel}
+                    onSelect={setSubChannel}
+                    label={channel === 'LINK_BILL' ? 'Send via' : 'Source'}
+                  />
+                  <FulfillmentDropdown options={ch.fulfillment} value={fulfillment} onSelect={setFulfillment} grow />
+                </div>
+              ) : (
+                <FulfillmentDropdown options={ch.fulfillment} value={fulfillment} onSelect={setFulfillment} />
+              )}
+            </div>
+          )}
+
+          {!hideChannelHeader && channel === 'LINK_BILL' && (
+            <LinkBillBlock expiryMin={30} />
+          )}
+
+          {!hideChannelHeader && <div style={cartStyles.divider} />}
+
+          <div style={cartStyles.formBlock}>
+            <div style={cartStyles.shipGroupsHead}>
+              <span style={cartStyles.formLabel}>
+                ข้อมูลลูกค้า{customerRequired && <span style={cartStyles.requiredMark}> *</span>}
+              </span>
+              {!groupOrderMode && (
+                <button style={cartStyles.splitBtn} onClick={enableGroupOrderMode}>
+                  <Icon name="plus" size={14} /> สร้างคำสั่งขายกลุ่ม
+                </button>
+              )}
+            </div>
+            <CustomerRow customer={customer} customers={customers} onSelect={setCustomer} />
+          </div>
+
+          {requiresAddress && !groupOrderMode && (
+            // Default flow — unchanged from before group orders existed:
+            // one address, one courier/fee, no group concept in sight.
+            <div style={cartStyles.formBlock}>
+              <span style={cartStyles.formLabel}>ข้อมูลการจัดส่ง</span>
+              <AddressSelector
+                address={addresses.find(a => a.id === shipGroups[0].addressId) || null}
+                addresses={addresses}
+                onSelect={(aid) => setGroupField(shipGroups[0].id, { addressId: aid })}
+              />
+              {currentFulfillment.needsCourier && (
+                <ShippingInfoRow
+                  shipping={{ courierId: shipGroups[0].courierId, fee: shipGroups[0].fee }}
+                  setShipping={(patch) => setGroupField(shipGroups[0].id, patch)}
+                  couriers={couriers}
+                />
+              )}
+            </div>
+          )}
+
+          {/* When a group order is active, its address/shipping controls
+              move down to sit with each group's own items (see below) —
+              collapsing this header shouldn't also hide the cart. */}
+        </div>
+      </div>
+
+      {groupOrderMode ? (
+        // Group order: the cart section shows a lightweight, read-only
+        // summary card per group (count, fulfillment, courier/fee, total) —
+        // no address/item list here. The ">" chevron opens the drawer
+        // (no overlay) for everything else, including dragging items
+        // between groups; the trash icon is the only other action.
+        <div style={cartStyles.items}>
+          <div style={cartStyles.shipGroupsHead}>
+            <span style={cartStyles.formLabel}>คำสั่งขายกลุ่ม</span>
+            <button style={cartStyles.splitBtn} onClick={addShipGroup}>
+              <Icon name="plus" size={14} /> เพิ่มกลุ่ม
+            </button>
+          </div>
+          <div style={cartStyles.shipGroupSummaryList}>
+            {shipGroups.map((g, gi) => (
+              <ShipGroupSummaryCard
+                key={g.id}
+                group={g}
+                index={gi}
+                items={cart.filter(i => i.groupId === g.id)}
+                couriers={couriers}
+                fulfillmentOptions={ch.fulfillment}
+                canRemove={shipGroups.length > 1}
+                onRemove={() => removeShipGroup(g.id)}
+                onOpen={() => { setActiveGroupId(g.id); setGroupDrawerOpen(true); }}
+              />
+            ))}
+          </div>
+        </div>
+      ) : cart.length === 0 ? (
+        <div style={cartStyles.empty}>
+          <div style={cartStyles.emptyIcon}><Icon name="cart" size={24} /></div>
+          <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Cart is empty</div>
+          <div style={{ fontSize: 'var(--fs-caption)' }}>Tap or scan products to begin an order.</div>
+        </div>
+      ) : (
+        <div style={cartStyles.items}>
+          {cart.map(item => renderCartRow(item))}
+        </div>
+      )}
+      </div>
+
+      {cart.length > 0 && (
+        <div style={cartStyles.extras}>
+          {!manualDiscount ? (
+            <button style={cartStyles.extraBtn} onClick={onOpenDiscount}>
+              <Icon name="discount" size={14} />
+              <span>Add discount</span>
+            </button>
+          ) : (
+            <div style={cartStyles.extraChip}>
+              <span style={cartStyles.extraChipIcon}><Icon name="discount" size={12} /></span>
+              <span style={cartStyles.extraChipBody} onClick={onOpenDiscount}>
+                <span style={cartStyles.extraChipLabel}>
+                  {manualDiscount.kind === 'percent' ? `${manualDiscount.value}% off` :
+                   manualDiscount.kind === 'amount'  ? `฿${manualDiscount.value} off` :
+                   manualDiscount.code}
+                </span>
+                <span style={cartStyles.extraChipSub}>
+                  −฿{manualDiscount.amount.toLocaleString()}{manualDiscount.reason ? ` · ${manualDiscount.reason}` : ''}
+                </span>
+              </span>
+              <button style={cartStyles.extraChipX} onClick={onRemoveDiscount} aria-label="Remove discount">
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          )}
+          {!orderNote ? (
+            <button style={cartStyles.extraBtn} onClick={onOpenNote}>
+              <Icon name="note" size={14} />
+              <span>Order note</span>
+            </button>
+          ) : (
+            <div style={cartStyles.extraChip}>
+              <span style={cartStyles.extraChipIcon}><Icon name="note" size={12} /></span>
+              <span style={cartStyles.extraChipBody} onClick={onOpenNote}>
+                <span style={cartStyles.extraChipLabel}>Order note</span>
+                <span style={cartStyles.extraChipSub}>{orderNote}</span>
+              </span>
+              <button style={cartStyles.extraChipX} onClick={onRemoveNote} aria-label="Remove note">
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={cartStyles.totals}>
+        <div style={cartStyles.totalSub}>
+          <span>{cart.reduce((s, i) => s + i.qty, 0)} รายการ · ฿{subtotal.toLocaleString()}</span>
+          <span>VAT 7% ฿{vat.toLocaleString()}</span>
+        </div>
+        {memberDiscount > 0 && (
+          <div style={{ ...cartStyles.totalRow, ...cartStyles.totalDisc }}>
+            <span>Member discount (5%)</span>
+            <span>−฿{memberDiscount.toLocaleString()}</span>
+          </div>
+        )}
+        {manualDiscount && (
+          <div style={{ ...cartStyles.totalRow, ...cartStyles.totalDisc }}>
+            <span>
+              {manualDiscount.kind === 'percent' ? `Discount ${manualDiscount.value}%` :
+               manualDiscount.kind === 'amount'  ? 'Manual discount' :
+               `Coupon · ${manualDiscount.code}`}
+            </span>
+            <span>−฿{manualDiscount.amount.toLocaleString()}</span>
+          </div>
+        )}
+        <div style={cartStyles.grandRow}>
+          <span style={cartStyles.grandLbl}>Total</span>
+          <span style={cartStyles.grandVal}>฿{total.toLocaleString()}</span>
+        </div>
+      </div>
+
+      <div style={cartStyles.action}>
+        <button
+          style={cartStyles.charge(cart.length === 0)}
+          disabled={cart.length === 0}
+          onClick={() => cart.length > 0 && onCheckout && onCheckout()}
+        >
+          <span>
+            {channel === 'LINK_BILL' ? 'Generate LINK_BILL' : `Checkout · ฿${total.toLocaleString()}`}
+          </span>
+          <span style={cartStyles.chargeKey}>↵ Enter</span>
+        </button>
+      </div>
+
+      {groupOrderMode && (
+        <GroupManagerDrawer
+          open={groupDrawerOpen}
+          onClose={() => setGroupDrawerOpen(false)}
+          shipGroups={shipGroups}
+          cart={cart}
+          renderRow={renderCartRow}
+          addresses={addresses}
+          couriers={couriers}
+          fulfillmentOptions={ch.fulfillment}
+          addShipGroup={addShipGroup}
+          removeShipGroup={removeShipGroup}
+          setGroupField={setGroupField}
+          setItemGroup={setItemGroup}
+        />
+      )}
+    </div>
+  );
+}
+
+window.Cart = Cart;
+
+// Figma "Horizon tab_v.1" — always-expanded segmented control (gray track,
+// white active tab + shadow). Used for the Channel row per CartSectionv3.
+function ChannelTabsFixed({ channels, channel, onSelect }) {
+  return (
+    <div style={cartStyles.segGroup} role="tablist">
+      {channels.map(c => {
+        const active = c.id === channel;
+        return (
+          <button
+            key={c.id}
+            role="tab"
+            aria-selected={active}
+            style={cartStyles.segTab(active)}
+            onClick={() => onSelect(c.id)}
+          >
+            <span style={cartStyles.segLabel}>{c.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Sub-channel picker (ONLINE source / LINK_BILL send-via) — same dropdown-row
+// pattern as FulfillmentDropdown, with a colored initial-letter chip instead
+// of an outline icon since sub-channels are brand-colored (LINE, Shopee, …).
+function SubChannelDropdown({ options, value, onSelect, label }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const current = options.find(o => o.id === value) || options[0];
+  return (
+    <div ref={anchorRef} style={{ ...cartStyles.popWrap, flex: '1 1 0' }}>
+      <button style={cartStyles.ddRow} onClick={() => setOpen(o => !o)}>
+        <span style={cartStyles.popItemIcon(current.color, true)}>{current.label.charAt(0).toUpperCase()}</span>
+        <span style={cartStyles.infoRowLabel}>{current.label}</span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevD" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>{label}</div>
+            {options.map(o => {
+              const active = o.id === value;
+              return (
+                <button
+                  key={o.id}
+                  style={cartStyles.popItem(active)}
+                  onClick={() => { onSelect(o.id); setOpen(false); }}
+                >
+                  <span style={cartStyles.popItemIcon(o.color, active)}>{o.label.charAt(0).toUpperCase()}</span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{o.label}</span>
+                    <span style={cartStyles.popItemSub}>{o.hint}</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Figma "Selection Dropdown" — a single bordered row showing the current
+// fulfillment option; click opens the same popover list used elsewhere.
+function FulfillmentDropdown({ options, value, onSelect, grow }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const current = options.find(o => o.id === value);
+  return (
+    <div ref={anchorRef} style={grow ? { ...cartStyles.popWrap, flex: '1 1 0' } : cartStyles.popWrap}>
+      <button style={cartStyles.ddRow} onClick={() => setOpen(o => !o)}>
+        <span style={cartStyles.infoRowIcon}><Icon name={current.icon} size={20} /></span>
+        <span style={cartStyles.infoRowLabel}>{current.label}</span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevD" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>Fulfillment</div>
+            {options.map(o => {
+              const active = o.id === value;
+              return (
+                <button
+                  key={o.id}
+                  style={cartStyles.popItem(active)}
+                  onClick={() => { onSelect(o.id); setOpen(false); }}
+                >
+                  <span style={cartStyles.popItemIcon('var(--gray-700)', active)}>
+                    <Icon name={o.icon} size={13} />
+                  </span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{o.label}</span>
+                    <span style={cartStyles.popItemSub}>{o.sub}</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Figma "Customer info" — full-width row (user icon · label · chevron-right).
+// Opens a popover to pick from the saved customer list.
+// No customer attached yet — plain "add customer" button (Figma's empty
+// "Customer info" state). Opens the same customer-picker popover as the card.
+function CustomerRow({ customer, customers, onSelect }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const isWalkIn = customer.name === 'Walk-in customer';
+
+  if (isWalkIn) {
+    return (
+      <div ref={anchorRef} style={cartStyles.popWrap}>
+        <button style={cartStyles.infoRow(false)} onClick={() => setOpen(o => !o)}>
+          <span style={cartStyles.infoRowIcon}><Icon name="user" size={20} /></span>
+          <span style={cartStyles.infoRowLabel}>เพิ่มข้อมูลลูกค้า</span>
+          <span style={cartStyles.infoRowChev}><Icon name="chevR" size={20} /></span>
+        </button>
+        {open && (
+          <>
+            <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+            <div style={popStyle}>
+              <div style={cartStyles.popHd}>ลูกค้า</div>
+              {customers.map(c => {
+                const active = c.id === customer.id;
+                return (
+                  <button key={c.id} style={cartStyles.popItem(active)} onClick={() => { onSelect(c.id); setOpen(false); }}>
+                    <span style={cartStyles.popItemIcon(c.tier === 'Gold' ? 'var(--amber-500)' : 'var(--brand-500)', active)}>
+                      <Icon name="user" size={13} />
+                    </span>
+                    <span style={cartStyles.popItemBody}>
+                      <span style={cartStyles.popItemLabel}>{c.name}</span>
+                      <span style={cartStyles.popItemSub}>{c.phone ? `${c.phone}${c.tier ? ` · ${c.tier} member` : ''}` : 'No customer attached'}</span>
+                    </span>
+                    {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // A real customer is attached — Figma's card: name/phone/email + "นำออก"
+  // to detach, and (when the order needs one) a nested address selector.
+  return (
+    <div style={cartStyles.customerCard}>
+      <div style={cartStyles.customerCardTop}>
+        <div style={cartStyles.customerCardBody} onClick={() => setOpen(o => !o)}>
+          <span style={cartStyles.customerCardName}>{customer.name}</span>
+          <span style={cartStyles.customerCardMeta}>
+            {[customer.phone, customer.email].filter(Boolean).join(' | ')}
+          </span>
+        </div>
+        <button style={cartStyles.customerCardRemove} onClick={() => onSelect('c001')}>
+          นำออก
+        </button>
+      </div>
+
+      {open && (
+        <div ref={anchorRef} style={cartStyles.popWrap}>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>ลูกค้า</div>
+            {customers.map(c => {
+              const active = c.id === customer.id;
+              return (
+                <button key={c.id} style={cartStyles.popItem(active)} onClick={() => { onSelect(c.id); setOpen(false); }}>
+                  <span style={cartStyles.popItemIcon(c.tier === 'Gold' ? 'var(--amber-500)' : 'var(--brand-500)', active)}>
+                    <Icon name="user" size={13} />
+                  </span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{c.name}</span>
+                    <span style={cartStyles.popItemSub}>{c.phone ? `${c.phone}${c.tier ? ` · ${c.tier} member` : ''}` : 'No customer attached'}</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A dropdown-input styled row: a green "ที่อยู่หลัก" badge (or gray for a
+// non-default address) + the address text + a chevron. Nested inside each
+// ShipGroupCard below, since with split shipment every group picks its own
+// address. If the attached customer has no saved address, shows a red
+// prompt instead (that group can't ship without one).
+function AddressSelector({ address, addresses, onSelect }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  if (addresses.length === 0) {
+    return (
+      <div style={cartStyles.addrField}>
+        <span style={{ ...cartStyles.addrFieldText, ...cartStyles.addrFieldPlaceholder }}>
+          ลูกค้ายังไม่มีที่อยู่ — กรุณาเพิ่มที่อยู่จัดส่ง
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div ref={anchorRef} style={cartStyles.popWrap}>
+      <button style={cartStyles.addrField} onClick={() => setOpen(o => !o)}>
+        {address && (
+          <span style={cartStyles.addrBadge(address.primary)}>{address.label}</span>
+        )}
+        <span style={cartStyles.addrFieldText}>
+          {address ? address.detail : 'เลือกที่อยู่จัดส่ง'}
+        </span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevD" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>ที่อยู่จัดส่ง</div>
+            {addresses.map(a => {
+              const active = address && a.id === address.id;
+              return (
+                <button key={a.id} style={cartStyles.popItem(active)} onClick={() => { onSelect(a.id); setOpen(false); }}>
+                  <span style={cartStyles.addrBadge(a.primary)}>{a.label}</span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemSub}>{a.detail}</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Figma "ข้อมูลการจัดส่ง" — courier + shipping fee, only relevant for
+// Online/LINK_BILL deliveries.
+function ShippingInfoRow({ shipping, setShipping, couriers }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const courier = couriers.find(c => c.id === shipping.courierId);
+  const feeText = shipping.fee !== '' && shipping.fee != null
+    ? `฿${Number(shipping.fee).toLocaleString()}`
+    : 'ไม่ระบุค่าส่ง';
+  const summary = courier ? `จัดส่งโดย ${courier.label} | ${feeText}` : 'ระบุขนส่งและค่าจัดส่ง';
+
+  return (
+    <div ref={anchorRef} style={cartStyles.popWrap}>
+      <button style={cartStyles.infoRow(false)} onClick={() => setOpen(o => !o)}>
+        <span style={cartStyles.infoRowIcon}><Icon name="truck" size={20} /></span>
+        <span style={cartStyles.infoRowLabel}>{summary}</span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevR" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>ค่าจัดส่ง (บาท)</div>
+            <input
+              type="number"
+              inputMode="decimal"
+              placeholder="ไม่ระบุ"
+              value={shipping.fee}
+              onChange={(e) => setShipping({ ...shipping, fee: e.target.value })}
+              style={cartStyles.shipFeeInput}
+            />
+            <div style={cartStyles.popHd}>ขนส่งโดย</div>
+            {couriers.map(c => {
+              const active = c.id === shipping.courierId;
+              return (
+                <button
+                  key={c.id}
+                  style={cartStyles.popItem(active)}
+                  onClick={() => setShipping({ ...shipping, courierId: c.id })}
+                >
+                  <span style={cartStyles.popItemIcon('var(--gray-700)', active)}><Icon name="truck" size={13} /></span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{c.label}</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// One "คำสั่งขายกลุ่ม" (sale-order group) within a group order — its own
+// address + courier + fee AND its own cart lines, all in one card, inside
+// the management drawer. No more "active" badge/border here — which group
+// is being worked on is already obvious from the browser's own focus state
+// on whatever field you're using, so a redundant custom badge just added
+// noise. Items move between groups by dragging a row onto another card.
+function ShipGroupCard({
+  group, index, items, renderRow, addresses, couriers, fulfillmentOptions, canRemove,
+  onRemove, onSetFulfillment, onSetAddress, onSetShipping, onDropItem,
+}) {
+  const [dragOver, setDragOver] = React.useState(false);
+  const { needsAddress, needsCourier } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
+
+  return (
+    <div
+      style={cartStyles.shipGroupCard(dragOver)}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const itemId = e.dataTransfer.getData('text/plain');
+        if (itemId) onDropItem(itemId, group.id);
+      }}
+    >
+      <div style={cartStyles.shipGroupHead}>
+        <span style={cartStyles.shipGroupLabel}>คำสั่งขายกลุ่ม {index + 1}</span>
+        <span style={cartStyles.shipGroupCount}>{items.length} รายการ</span>
+        {canRemove && (
+          <button
+            style={cartStyles.shipGroupRemove}
+            onClick={onRemove}
+            aria-label="Remove ship group"
+          >
+            <Icon name="x" size={16} />
+          </button>
+        )}
+      </div>
+
+      <FulfillmentDropdown options={fulfillmentOptions} value={group.fulfillmentId} onSelect={onSetFulfillment} />
+
+      {needsAddress && (
+        <AddressSelector
+          address={addresses.find(a => a.id === group.addressId) || null}
+          addresses={addresses}
+          onSelect={onSetAddress}
+        />
+      )}
+
+      {needsCourier && (
+        <ShippingInfoRow
+          shipping={{ courierId: group.courierId, fee: group.fee }}
+          setShipping={onSetShipping}
+          couriers={couriers}
+        />
+      )}
+
+      <div style={cartStyles.shipGroupItems}>
+        {items.length === 0 ? (
+          <div style={cartStyles.shipGroupItemsEmpty}>
+            ยังไม่มีสินค้าในกลุ่มนี้ — ลากรายการจากกลุ่มอื่นมาวางที่นี่ หรือแตะสินค้าขณะกลุ่มนี้เปิดอยู่เพื่อเพิ่มเข้ามา
+          </div>
+        ) : (
+          items.map(item => renderRow(item))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Main-pane version of a group — read-only, just enough to shop by: group
+// number, item count, fulfillment type, total, and courier/fee if it ships.
+// No address, no item list, no "active" state (that's what the drawer's own
+// focus is for). Only action here is deleting the group; everything else —
+// including opening the drawer — is behind the ">" chevron.
+function ShipGroupSummaryCard({ group, index, items, couriers, fulfillmentOptions, canRemove, onRemove, onOpen }) {
+  const { fulfillment, needsCourier } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
+  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const courier = couriers.find(c => c.id === group.courierId);
+  const feeText = group.fee !== '' && group.fee != null ? `฿${Number(group.fee).toLocaleString()}` : 'ไม่ระบุค่าส่ง';
+
+  return (
+    <div style={cartStyles.shipGroupSummaryCard}>
+      <div style={cartStyles.shipGroupSummaryTop}>
+        <span style={cartStyles.shipGroupLabel}>คำสั่งขายกลุ่ม {index + 1}</span>
+        {canRemove && (
+          <button style={cartStyles.shipGroupRemove} onClick={onRemove} aria-label="Remove ship group">
+            <Icon name="x" size={16} />
+          </button>
+        )}
+        <button style={cartStyles.shipGroupSummaryOpen} onClick={onOpen} aria-label="Manage group">
+          <Icon name="chevR" size={16} color="var(--text-tertiary)" />
+        </button>
+      </div>
+
+      <div style={cartStyles.shipGroupSummaryBadges}>
+        <span style={cartStyles.shipGroupSummaryBadge}>{items.length} รายการ</span>
+        <span style={cartStyles.shipGroupFulfillBadge}>{fulfillment.label}</span>
+      </div>
+
+      {needsCourier && (
+        <div style={cartStyles.shipGroupSummaryMeta}>
+          {courier ? courier.label : 'ยังไม่ระบุขนส่ง'} · {feeText}
+        </div>
+      )}
+
+      <div style={cartStyles.shipGroupSummaryTotal}>
+        <span>ราคารวม</span>
+        <span>฿{subtotal.toLocaleString()}</span>
+      </div>
+    </div>
+  );
+}
+
+// Slides in from the right for everything about managing a group order —
+// adding/removing groups, each one's fulfillment/address/courier/fee, and
+// which cart lines belong to it (drag a row from its card onto another
+// group's card to move it). Deliberately has NO scrim/overlay: a backdrop
+// that blocks the rest of the screen defeats "pick a group, then tap
+// products into it", since the product grid needs to stay clickable while
+// this is open.
+function GroupManagerDrawer({
+  open, onClose, shipGroups, cart, renderRow, addresses, couriers, fulfillmentOptions,
+  addShipGroup, removeShipGroup, setGroupField, setItemGroup,
+}) {
+  // Mounted a beat longer than `open` so the close transition can play
+  // before the drawer leaves the DOM — otherwise it would just vanish.
+  const [mounted, setMounted] = React.useState(open);
+  const [visible, setVisible] = React.useState(false);
+
+  React.useEffect(() => {
+    if (open) {
+      setMounted(true);
+      const raf = requestAnimationFrame(() => setVisible(true));
+      return () => cancelAnimationFrame(raf);
+    }
+    setVisible(false);
+    const t = setTimeout(() => setMounted(false), 220);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!mounted) return null;
+
+  return (
+    <div style={cartStyles.drawer(visible)}>
+      <div style={cartStyles.drawerHead}>
+        <span style={cartStyles.drawerTitle}>จัดการคำสั่งขายกลุ่ม</span>
+        <button style={cartStyles.drawerClose} onClick={onClose} aria-label="Close">
+          <Icon name="x" size={20} />
+        </button>
+      </div>
+      <div className="scroll-y" style={cartStyles.drawerBody}>
+        {shipGroups.map((g, gi) => (
+          <ShipGroupCard
+            key={g.id}
+            group={g}
+            index={gi}
+            items={cart.filter(i => i.groupId === g.id)}
+            renderRow={renderRow}
+            addresses={addresses}
+            couriers={couriers}
+            fulfillmentOptions={fulfillmentOptions}
+            canRemove={shipGroups.length > 1}
+            onRemove={() => removeShipGroup(g.id)}
+            onSetFulfillment={(fid) => setGroupField(g.id, { fulfillmentId: fid })}
+            onSetAddress={(aid) => setGroupField(g.id, { addressId: aid })}
+            onSetShipping={(patch) => setGroupField(g.id, patch)}
+            onDropItem={setItemGroup}
+          />
+        ))}
+        {/* Adding a group here (bottom) rather than at the top means it
+            appears where you're already looking, top-to-bottom, instead of
+            forcing a scroll back up every time you add one. */}
+        <button style={cartStyles.splitBtn} onClick={addShipGroup}>
+          <Icon name="plus" size={14} /> เพิ่มกลุ่ม
+        </button>
+      </div>
+    </div>
+  );
+}
+

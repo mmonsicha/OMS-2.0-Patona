@@ -504,7 +504,7 @@ function App() {
   // fee per group. Dropping back to 1 group exits group mode automatically,
   // so the old single-destination flow is always just a removal away.
   const [shipGroups, setShipGroups]   = React.useState([
-    { id: 'g1', addressId: null, courierId: null, fee: '', fulfillmentId: D.channels[0].fulfillment[0].id },
+    { id: 'g1', addressId: null, courierId: null, fee: '', pickupStoreId: storeId, fulfillmentId: D.channels[0].fulfillment[0].id },
   ]);
   const [groupOrderMode, setGroupOrderMode] = React.useState(false);
   // Which group newly-tapped products land in. Picking a product from the
@@ -523,7 +523,7 @@ function App() {
     const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
     setShipGroups(prev => [
       ...prev,
-      { id: newId, addressId: null, courierId: null, fee: '', fulfillmentId: ch.fulfillment[0].id },
+      { id: newId, addressId: null, courierId: null, fee: '', pickupStoreId: storeId, fulfillmentId: ch.fulfillment[0].id },
     ]);
     setActiveGroupId(newId);
   };
@@ -557,12 +557,14 @@ function App() {
   };
   // Drag-and-drop between groups (in the drawer) — blocked if it would mix
   // a digital item into a group with non-digital items or vice versa; the
-  // rule holds no matter how the item got there.
-  const setItemGroup = (itemId, groupId) => {
+  // rule holds no matter how the item got there. Addressed by `lineId`, not
+  // product id, since the same product can now have a line in more than one
+  // group at once.
+  const setItemGroup = (lineId, groupId) => {
     setCart(prev => {
-      const movingItem = prev.find(i => i.id === itemId);
+      const movingItem = prev.find(i => i.lineId === lineId);
       if (!movingItem) return prev;
-      const targetItems = prev.filter(i => i.groupId === groupId && i.id !== itemId);
+      const targetItems = prev.filter(i => i.groupId === groupId && i.lineId !== lineId);
       const targetHasDigital = targetItems.some(i => i.cat === 'digital');
       const targetHasOther = targetItems.some(i => i.cat !== 'digital');
       const movingIsDigital = movingItem.cat === 'digital';
@@ -570,13 +572,15 @@ function App() {
         return prev; // would mix digital with physical/service — reject
       }
       const wasEmpty = targetItems.length === 0;
-      const next = prev.map(i => i.id === itemId ? { ...i, groupId } : i);
-      if (wasEmpty) {
-        const ch = D.channels.find(c => c.id === channel);
-        const movedItem = next.find(i => i.id === itemId);
-        setShipGroups(gs => gs.map(g => g.id === groupId
-          ? { ...g, fulfillmentId: suggestFulfillmentId(ch, [movedItem]) }
-          : g));
+      const next = prev.map(i => i.lineId === lineId ? { ...i, groupId } : i);
+      // A service item dropped into a group always makes it an on-site
+      // visit, whether the group was empty or already had other items —
+      // same rule as addToCart below.
+      const ch = D.channels.find(c => c.id === channel);
+      const forced = movingItem.cat === 'service' ? 'ON_SITE' : (wasEmpty ? suggestFulfillmentId(ch, [movingItem]) : null);
+      if (forced) {
+        setShipGroups(gs => gs.map(g => g.id === groupId ? { ...g, fulfillmentId: forced } : g));
+        if (!groupOrderMode) setFulfillment(forced);
       }
       return next;
     });
@@ -637,38 +641,65 @@ function App() {
     return alt ? alt.id : null; // caller creates a fresh group
   };
 
+  // Tapping a product always adds into whichever group is currently active
+  // (focus mode — see ShipGroupCard/ShipGroupSummaryCard's `onActivate`), so
+  // the same product can end up as separate lines in separate groups, each
+  // with its own qty and its own group's fulfillment (e.g. Iced Latte picked
+  // up now in one group, Iced Latte shipped later in another). Existing qty
+  // is only bumped when the product already has a line in THAT group, not
+  // just anywhere in the cart.
   const addToCart = (p) => {
     setCart(prev => {
-      const found = prev.find(i => i.id === p.id);
-      if (found) return prev.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i);
-
       let groupId = pickGroupForItem(p, prev);
+      let groupIsNew = false;
       if (groupId === null) {
         const ch = D.channels.find(c => c.id === channel);
         const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
         setShipGroups(gs => [...gs, {
-          id: newId, addressId: null, courierId: null, fee: '',
+          id: newId, addressId: null, courierId: null, fee: '', pickupStoreId: storeId,
           fulfillmentId: suggestFulfillmentId(ch, [p]),
         }]);
         setGroupOrderMode(true);
+        setActiveGroupId(newId);
         groupId = newId;
-      } else {
+        groupIsNew = true;
+      }
+
+      const found = prev.find(i => i.id === p.id && i.groupId === groupId);
+      if (found) return prev.map(i => i === found ? { ...i, qty: i.qty + 1 } : i);
+
+      if (!groupIsNew) {
         const wasEmpty = prev.every(i => i.groupId !== groupId);
-        if (wasEmpty) {
-          const ch = D.channels.find(c => c.id === channel);
+        const ch = D.channels.find(c => c.id === channel);
+        // A service item always means an on-site visit for the WHOLE group,
+        // whether it's the first thing added or joining items already
+        // there — there's no such thing as "mostly shipped, but one item
+        // needs a technician visit". Non-service items only get a fresh
+        // suggestion when they're the first thing in an empty group, so
+        // they never fight a fulfillment the cashier already picked.
+        const forced = p.cat === 'service' ? 'ON_SITE' : (wasEmpty ? suggestFulfillmentId(ch, [p]) : null);
+        if (forced) {
           setShipGroups(gs => gs.map(g => g.id === groupId
-            ? { ...g, fulfillmentId: suggestFulfillmentId(ch, [p]) }
+            ? { ...g, fulfillmentId: forced }
             : g));
+          // Outside group-order mode there's just the one group, and the
+          // cart's top fulfillment dropdown reads the separate global
+          // `fulfillment` state, not this group's `fulfillmentId` — keep
+          // them in sync so e.g. a service item actually flips the header
+          // to "ON_SITE" (and reveals its address/travel-fee fields)
+          // instead of leaving it stuck on whatever was picked before.
+          if (!groupOrderMode) setFulfillment(forced);
         }
       }
-      return [...prev, { ...p, qty: 1, groupId }];
+      const lineId = `${p.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      return [...prev, { ...p, qty: 1, groupId, lineId }];
     });
   };
-  const setQty = (id, qty) => {
-    if (qty <= 0) return setCart(prev => prev.filter(i => i.id !== id));
-    setCart(prev => prev.map(i => i.id === id ? { ...i, qty } : i));
+  const setQty = (lineId, qty) => {
+    if (qty <= 0) return setCart(prev => prev.filter(i => i.lineId !== lineId));
+    setCart(prev => prev.map(i => i.lineId === lineId ? { ...i, qty } : i));
   };
-  const removeItem = (id) => setCart(prev => prev.filter(i => i.id !== id));
+  const removeItem = (lineId) => setCart(prev => prev.filter(i => i.lineId !== lineId));
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
   const currentCustomer = D.customers.find(c => c.id === customer);
@@ -698,6 +729,7 @@ function App() {
     customers: D.customers,
     setCustomer: onChangeCustomer,
     addresses: currentCustomer.addresses,
+    stores: D.stores,
     phone,
     setPhone,
     subtotal,

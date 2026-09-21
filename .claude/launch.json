@@ -4,7 +4,7 @@
     {
       "name": "patona-static",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["/Users/montira/Desktop/KWANG/Patona 2/.claude/static-server.js"],
+      "runtimeArgs": [".claude/static-server.js"],
       "port": 8934
     }
   ]

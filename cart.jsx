@@ -126,19 +126,27 @@ const cartStyles = {
     padding: '2px 0',
   },
   // `dragOver` highlights the card as a valid drop target while an item is
-  // being dragged over it — no more "active group" concept to style here.
-  shipGroupCard: (dragOver) => ({
+  // being dragged over it. `active` marks the group new product taps land
+  // in (focus mode) — tapping anywhere on the card (drawer only) makes it
+  // the active one; dragOver wins visually if both are true at once.
+  shipGroupCard: (dragOver, active) => ({
     display: 'flex', flexDirection: 'column', gap: 8,
     border: `1.5px dashed ${dragOver ? 'var(--brand-500)' : 'transparent'}`,
-    outline: dragOver ? 'none' : '1px solid var(--stroke)',
-    background: dragOver ? 'var(--brand-50)' : 'var(--bg-muted)',
+    outline: dragOver ? 'none' : `1px solid ${active ? 'var(--brand-500)' : 'var(--stroke)'}`,
+    background: dragOver ? 'var(--brand-50)' : active ? 'var(--brand-50)' : 'var(--bg-muted)',
     borderRadius: 'var(--d-radius)',
     padding: '10px 12px',
-    transition: 'border-color .12s, background .12s',
+    cursor: 'pointer',
+    transition: 'border-color .12s, background .12s, outline-color .12s',
   }),
   shipGroupHead: { display: 'flex', alignItems: 'center', gap: 8 },
   shipGroupLabel: { fontWeight: 600, fontSize: 'var(--fs-body)', color: 'var(--text-primary)', flex: 1, minWidth: 0 },
   shipGroupCount: { fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)' },
+  shipGroupActiveBadge: {
+    fontSize: 11, fontWeight: 600, color: 'var(--brand-700)',
+    background: 'var(--brand-100)', borderRadius: 999,
+    padding: '2px 8px', flexShrink: 0, whiteSpace: 'nowrap',
+  },
   shipGroupRemove: {
     appearance: 'none', border: 0, background: 'transparent',
     color: 'var(--rose-500)', cursor: 'pointer', flexShrink: 0,
@@ -148,14 +156,16 @@ const cartStyles = {
   // Main-pane summary card — read-only overview (count, fulfillment,
   // courier/fee, total) with delete + "manage" (chevron) as the only
   // actions. Cards get breathing room from each other via `items`' gap.
-  shipGroupSummaryCard: {
+  // `active` mirrors the drawer's focus-mode highlight so it's still
+  // obvious which group new taps land in once the drawer is closed.
+  shipGroupSummaryCard: (active) => ({
     width: '100%',
-    border: '1px solid var(--stroke)',
-    background: 'var(--bg-surface)',
+    border: `1px solid ${active ? 'var(--brand-500)' : 'var(--stroke)'}`,
+    background: active ? 'var(--brand-50)' : 'var(--bg-surface)',
     borderRadius: 'var(--d-radius)',
     padding: '12px 14px',
     display: 'flex', flexDirection: 'column', gap: 8,
-  },
+  }),
   shipGroupSummaryTop: { display: 'flex', alignItems: 'center', gap: 4 },
   shipGroupSummaryOpen: {
     appearance: 'none', border: 0, background: 'transparent',
@@ -194,16 +204,21 @@ const cartStyles = {
   // Group-management drawer — slides in from the right, no scrim: the
   // product grid must stay tappable while it's open (that's the point of
   // "pick a group, then shop into it").
+  // Animates via `right`, not `transform` — a transform on this ancestor
+  // (even `translateX(0)` at rest) creates a new containing block, which
+  // would make every `position: fixed` popover inside it (FulfillmentDropdown,
+  // AddressSelector, ShippingInfoRow — see usePopoverFit) position itself
+  // relative to the drawer instead of the viewport and render off-screen.
   drawer: (visible) => ({
-    position: 'fixed', top: 0, right: 0, bottom: 0,
+    position: 'fixed', top: 0, bottom: 0,
+    right: visible ? 0 : 'calc(-1 * min(440px, 92vw))',
     width: 'min(440px, 92vw)',
     background: 'var(--bg-surface)',
     borderLeft: '1px solid var(--stroke)',
     boxShadow: '-8px 0 24px rgba(15,23,42,.18)',
     zIndex: 150,
     display: 'flex', flexDirection: 'column',
-    transform: visible ? 'translateX(0)' : 'translateX(100%)',
-    transition: 'transform .22s cubic-bezier(.32,.72,0,1)',
+    transition: 'right .22s cubic-bezier(.32,.72,0,1)',
   }),
   drawerHead: {
     display: 'flex', alignItems: 'center', gap: 12,
@@ -361,13 +376,17 @@ const cartStyles = {
     color: 'var(--text-tertiary)',
     padding: '8px 10px 4px',
   },
-  popItem: (active) => ({
+  // `disabled` (e.g. a pickup branch with no stock for the group) dims the
+  // row and swaps in a not-allowed cursor — still visible in the list (so
+  // it's clear the branch exists, just can't be picked) rather than hidden.
+  popItem: (active, disabled) => ({
     appearance: 'none', border: 0,
     background: active ? 'var(--brand-50)' : 'transparent',
     borderRadius: 8,
     padding: '8px 10px',
     display: 'flex', alignItems: 'center', gap: 10,
-    cursor: 'pointer',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.45 : 1,
     fontFamily: 'inherit',
     textAlign: 'left',
     width: '100%',
@@ -385,6 +404,7 @@ const cartStyles = {
   popItemBody: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
   popItemLabel: { fontWeight: 600, color: 'var(--text-primary)', fontSize: 'var(--fs-body)' },
   popItemSub: { fontSize: 11, color: 'var(--text-tertiary)' },
+  popItemSubWarn: { fontSize: 11, color: 'var(--rose-600)', fontWeight: 600 },
   popCheck: {
     width: 20, height: 20, borderRadius: '50%',
     background: 'var(--brand-500)', color: '#fff',
@@ -406,14 +426,36 @@ const cartStyles = {
     display: 'grid', placeItems: 'center',
   },
 
-  row: {
+  // `dragging` is the row currently being picked up (see beginItemDrag) —
+  // dimmed in place while its floating ghost chip follows the pointer.
+  // Gains a leading column for the drag handle only in group-order mode,
+  // where rows can actually be dragged between groups.
+  row: (dragging, withHandle) => ({
     display: 'grid',
-    gridTemplateColumns: '36px 1fr auto',
+    gridTemplateColumns: (withHandle ? '20px ' : '') + '36px 1fr auto',
     gap: 10,
     padding: '10px 0',
     borderBottom: '1px solid var(--stroke)',
     alignItems: 'center',
+    opacity: dragging ? 0.4 : 1,
+  }),
+  dragHandle: {
+    appearance: 'none', border: 0, background: 'transparent',
+    color: 'var(--text-tertiary)', cursor: 'grab',
+    display: 'grid', placeItems: 'center',
+    width: 20, height: 36,
+    touchAction: 'none',
+    padding: 0,
   },
+  dragGhost: (x, y) => ({
+    position: 'fixed', left: x + 14, top: y + 14,
+    zIndex: 300, pointerEvents: 'none',
+    display: 'flex', alignItems: 'center', gap: 8,
+    background: 'var(--bg-surface)', border: '1px solid var(--stroke)',
+    borderRadius: 'var(--d-radius)', boxShadow: 'var(--shadow-lg)',
+    padding: '6px 12px 6px 6px', maxWidth: 220,
+    fontSize: 'var(--fs-body-sm)', fontWeight: 600, color: 'var(--text-primary)',
+  }),
   rowSwatch: (color) => ({
     width: 36, height: 36,
     borderRadius: 'var(--d-radius-sm)',
@@ -609,7 +651,13 @@ function groupFulfillmentNeeds(fulfillmentOptions, group, items) {
   const allDigital = items.length > 0 && items.every(i => i.cat === 'digital');
   const needsAddress = !allDigital && (hasService || fulfillment.needsAddress);
   const needsCourier = needsAddress && fulfillment.needsCourier;
-  return { fulfillment, needsAddress, needsCourier };
+  // Travel fee (staff visiting the customer) rides along with the address,
+  // same as courier fee does for a shipped group — just no courier to pick.
+  const needsTravelFee = needsAddress && !!fulfillment.needsTravelFee;
+  // Pickup branch doesn't depend on an address at all — the customer comes
+  // to whichever store is picked, so it stands on its own.
+  const needsPickupBranch = !!fulfillment.needsPickupBranch;
+  return { fulfillment, needsAddress, needsCourier, needsTravelFee, needsPickupBranch };
 }
 
 function usePopoverFit(open) {
@@ -649,7 +697,7 @@ function Cart({
   subChannel, setSubChannel,
   payment, setPayment, paymentMethods,
   cart, setQty, removeItem, customer, customers, setCustomer,
-  addresses,
+  addresses, stores,
   phone, setPhone,
   subtotal, vat, discount, total,
   selectorPattern, hideChannelHeader,
@@ -678,6 +726,7 @@ function Cart({
   const hasService = cart.some(i => i.cat === 'service');
   const hasDigitalOnly = cart.length > 0 && cart.every(i => i.cat === 'digital');
   const requiresAddress = !hasDigitalOnly && (hasService || currentFulfillment.needsAddress);
+  const requiresPickupBranch = !hasDigitalOnly && !!currentFulfillment.needsPickupBranch;
   const customerRequired = channel !== 'POS' || hasService;
 
   // The channel/fulfillment/customer/address stack folds to a one-line
@@ -691,6 +740,61 @@ function Cart({
   const [formOpen, setFormOpen] = React.useState(true);
   const [groupDrawerOpen, setGroupDrawerOpen] = React.useState(false);
 
+  // Dragging a cart row onto another group's card (drawer only) — built on
+  // Pointer Events, not the HTML5 drag-and-drop API. Native `draggable` +
+  // `dragstart`/`dragover`/`drop` never fires from a touch gesture (iOS
+  // Safari doesn't support it at all; Chrome's touch/mobile-emulation
+  // doesn't either), which made this dead on every tablet and every mobile
+  // emulator, not just phones — pointer events fire the same way for mouse,
+  // touch and pen, real or emulated, so one implementation covers all of
+  // them. `dragLineId` identifies the row being dragged, `dragPos` positions
+  // the floating ghost chip, `dragOverGroupId` is whichever ShipGroupCard
+  // (tagged with `data-ship-group-id`, found via elementFromPoint) is
+  // currently under the pointer — read by ShipGroupCard to show the same
+  // "drop here" highlight the old dragOver state gave it.
+  const [dragLineId, setDragLineId] = React.useState(null);
+  const [dragPos, setDragPos] = React.useState(null);
+  const [dragOverGroupId, setDragOverGroupId] = React.useState(null);
+  const dragMovedRef = React.useRef(false);
+
+  const beginItemDrag = (e, lineId) => {
+    if (!groupOrderMode) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Keeps every later pointermove/pointerup routed to this handle even
+    // once the finger/cursor has moved off it — without it a fast drag
+    // would "escape" the small handle and stop tracking. Some synthetic or
+    // already-released pointers can't be captured; that just means we fall
+    // back to whatever the browser delivers naturally, not a hard failure.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    dragMovedRef.current = false;
+    setDragLineId(lineId);
+    setDragPos({ x: e.clientX, y: e.clientY });
+  };
+  const moveItemDrag = (e, lineId) => {
+    if (dragLineId !== lineId) return;
+    dragMovedRef.current = true;
+    setDragPos({ x: e.clientX, y: e.clientY });
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el && el.closest ? el.closest('[data-ship-group-id]') : null;
+    setDragOverGroupId(card ? card.getAttribute('data-ship-group-id') : null);
+  };
+  const endItemDrag = (e, lineId) => {
+    if (dragLineId !== lineId) return;
+    if (dragMovedRef.current && dragOverGroupId) setItemGroup(lineId, dragOverGroupId);
+    setDragLineId(null);
+    setDragPos(null);
+    setDragOverGroupId(null);
+  };
+  // Gesture got interrupted (browser took over, pointer left the window,
+  // multi-touch, …) — drop it without committing a move.
+  const cancelItemDrag = (e, lineId) => {
+    if (dragLineId !== lineId) return;
+    setDragLineId(null);
+    setDragPos(null);
+    setDragOverGroupId(null);
+  };
+
   const summaryBits = [
     !hideChannelHeader && ch.label,
     !hideChannelHeader && currentFulfillment && currentFulfillment.label,
@@ -701,16 +805,28 @@ function Cart({
   // per-group sections (group order mode) so the row markup exists in
   // exactly one place. Draggable in group mode so it can be dropped onto
   // another group's card in the drawer, instead of a numbered chip picker.
+  // Keyed and addressed by `lineId`, not the product id — the same product
+  // can now sit in more than one group at once (e.g. Iced Latte picked up
+  // now in one group, Iced Latte shipped later in another), each its own
+  // line with its own qty.
   const renderCartRow = (item) => {
     const lineTotal = item.price * item.qty;
     const initials = item.name.split(' ').slice(0, 2).map(s => s[0]).join('').toUpperCase();
+    const isDragging = dragLineId === item.lineId;
     return (
-      <div
-        key={item.id}
-        style={cartStyles.row}
-        draggable={groupOrderMode}
-        onDragStart={groupOrderMode ? (e) => e.dataTransfer.setData('text/plain', item.id) : undefined}
-      >
+      <div key={item.lineId} style={cartStyles.row(isDragging, groupOrderMode)}>
+        {groupOrderMode && (
+          <button
+            style={cartStyles.dragHandle}
+            aria-label="Drag to move to another group"
+            onPointerDown={(e) => beginItemDrag(e, item.lineId)}
+            onPointerMove={(e) => moveItemDrag(e, item.lineId)}
+            onPointerUp={(e) => endItemDrag(e, item.lineId)}
+            onPointerCancel={(e) => cancelItemDrag(e, item.lineId)}
+          >
+            <Icon name="grip" size={16} />
+          </button>
+        )}
         <div style={cartStyles.rowSwatch(item.swatch)}>{initials}</div>
         <div style={cartStyles.rowInfo}>
           <span style={cartStyles.rowName}>{item.name}</span>
@@ -723,11 +839,11 @@ function Cart({
         <div style={cartStyles.rowPrice}>
           <span style={cartStyles.rowTotal}>฿{lineTotal.toLocaleString()}</span>
           <div style={cartStyles.qtyGroup}>
-            <button style={cartStyles.qtyBtn} onClick={() => setQty(item.id, item.qty - 1)}>
+            <button style={cartStyles.qtyBtn} onClick={() => setQty(item.lineId, item.qty - 1)}>
               <Icon name={item.qty === 1 ? 'x' : 'minus'} size={14} />
             </button>
             <span style={cartStyles.qtyVal}>{item.qty}</span>
-            <button style={cartStyles.qtyBtn} onClick={() => setQty(item.id, item.qty + 1)}>
+            <button style={cartStyles.qtyBtn} onClick={() => setQty(item.lineId, item.qty + 1)}>
               <Icon name="plus" size={14} />
             </button>
           </div>
@@ -805,7 +921,8 @@ function Cart({
 
           {requiresAddress && !groupOrderMode && (
             // Default flow — unchanged from before group orders existed:
-            // one address, one courier/fee, no group concept in sight.
+            // one address, one courier/fee (or travel fee for ON_SITE), no
+            // group concept in sight.
             <div style={cartStyles.formBlock}>
               <span style={cartStyles.formLabel}>ข้อมูลการจัดส่ง</span>
               <AddressSelector
@@ -820,6 +937,24 @@ function Cart({
                   couriers={couriers}
                 />
               )}
+              {currentFulfillment.needsTravelFee && (
+                <TravelFeeRow
+                  fee={shipGroups[0].fee}
+                  setFee={(fee) => setGroupField(shipGroups[0].id, { fee })}
+                />
+              )}
+            </div>
+          )}
+
+          {requiresPickupBranch && !groupOrderMode && (
+            <div style={cartStyles.formBlock}>
+              <span style={cartStyles.formLabel}>สาขาที่รับสินค้า</span>
+              <PickupBranchSelector
+                storeId={shipGroups[0].pickupStoreId}
+                stores={stores}
+                items={cart}
+                onSelect={(sid) => setGroupField(shipGroups[0].id, { pickupStoreId: sid })}
+              />
             </div>
           )}
 
@@ -850,8 +985,11 @@ function Cart({
                 index={gi}
                 items={cart.filter(i => i.groupId === g.id)}
                 couriers={couriers}
+                stores={stores}
                 fulfillmentOptions={ch.fulfillment}
                 canRemove={shipGroups.length > 1}
+                active={g.id === activeGroupId}
+                onActivate={() => setActiveGroupId(g.id)}
                 onRemove={() => removeShipGroup(g.id)}
                 onOpen={() => { setActiveGroupId(g.id); setGroupDrawerOpen(true); }}
               />
@@ -965,13 +1103,31 @@ function Cart({
           renderRow={renderCartRow}
           addresses={addresses}
           couriers={couriers}
+          stores={stores}
           fulfillmentOptions={ch.fulfillment}
+          activeGroupId={activeGroupId}
+          setActiveGroupId={setActiveGroupId}
+          dragOverGroupId={dragOverGroupId}
           addShipGroup={addShipGroup}
           removeShipGroup={removeShipGroup}
           setGroupField={setGroupField}
-          setItemGroup={setItemGroup}
         />
       )}
+
+      {/* Floating chip that follows the pointer while a row is being
+          dragged (see beginItemDrag) — position: fixed at the Cart level,
+          not inside whichever card the row started in, so it isn't clipped
+          by the drawer's own scroll region as it crosses card boundaries. */}
+      {dragLineId && dragPos && (() => {
+        const draggedItem = cart.find(i => i.lineId === dragLineId);
+        if (!draggedItem) return null;
+        return (
+          <div style={cartStyles.dragGhost(dragPos.x, dragPos.y)}>
+            <Icon name="grip" size={14} />
+            <span>{draggedItem.name}</span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1282,38 +1438,123 @@ function ShippingInfoRow({ shipping, setShipping, couriers }) {
   );
 }
 
+// Travel fee for an ON_SITE visit — same fee field as ShippingInfoRow's, just
+// no courier to pick since staff drive themselves rather than book a courier.
+function TravelFeeRow({ fee, setFee }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const feeText = fee !== '' && fee != null ? `฿${Number(fee).toLocaleString()}` : 'ไม่ระบุค่าเดินทาง';
+
+  return (
+    <div ref={anchorRef} style={cartStyles.popWrap}>
+      <button style={cartStyles.infoRow(false)} onClick={() => setOpen(o => !o)}>
+        <span style={cartStyles.infoRowIcon}><Icon name="truck" size={20} /></span>
+        <span style={cartStyles.infoRowLabel}>ค่าเดินทาง · {feeText}</span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevR" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>ค่าเดินทาง (บาท)</div>
+            <input
+              type="number"
+              inputMode="decimal"
+              placeholder="ไม่ระบุ"
+              value={fee}
+              onChange={(e) => setFee(e.target.value)}
+              style={cartStyles.shipFeeInput}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Which store branch a "รับภายหลัง" (pickup later) group will be collected
+// from — defaults to whichever store the cashier is currently in, but a
+// customer may ask to collect from a different branch instead. A branch
+// that doesn't have enough of every item in the group is shown but disabled
+// — visible so it's clear the branch exists, just can't be picked for this
+// order, rather than silently missing from the list.
+function PickupBranchSelector({ storeId, stores, items, onSelect }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const store = stores.find(s => s.id === storeId) || null;
+  const hasStockAt = (sid) => items.every(i => {
+    const available = i.stockByStore ? i.stockByStore[sid] : i.stock;
+    return available == null || available >= i.qty;
+  });
+
+  return (
+    <div ref={anchorRef} style={cartStyles.popWrap}>
+      <button style={cartStyles.infoRow(false)} onClick={() => setOpen(o => !o)}>
+        <span style={cartStyles.infoRowIcon}><Icon name="store" size={20} /></span>
+        <span style={cartStyles.infoRowLabel}>
+          {store ? `รับที่สาขา ${store.label}` : 'เลือกสาขาที่รับสินค้า'}
+        </span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevR" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>สาขาที่รับสินค้า</div>
+            {stores.map(s => {
+              const active = s.id === storeId;
+              const available = hasStockAt(s.id);
+              return (
+                <button
+                  key={s.id}
+                  style={cartStyles.popItem(active, !available)}
+                  disabled={!available}
+                  onClick={() => { if (available) { onSelect(s.id); setOpen(false); } }}
+                >
+                  <span style={cartStyles.popItemIcon('var(--gray-700)', active)}><Icon name="store" size={13} /></span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{s.label}</span>
+                    <span style={available ? cartStyles.popItemSub : cartStyles.popItemSubWarn}>
+                      {available ? s.hours : 'สินค้าไม่พอที่สาขานี้'}
+                    </span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // One "คำสั่งขายกลุ่ม" (sale-order group) within a group order — its own
 // address + courier + fee AND its own cart lines, all in one card, inside
-// the management drawer. No more "active" badge/border here — which group
-// is being worked on is already obvious from the browser's own focus state
-// on whatever field you're using, so a redundant custom badge just added
-// noise. Items move between groups by dragging a row onto another card.
+// the management drawer. Tapping the card (focus mode) makes it the active
+// group, so tapping products in the grid — drawer stays open, no scrim —
+// adds straight into it instead of wherever it last landed. Items can also
+// still be dragged from one card onto another to move them across groups.
 function ShipGroupCard({
-  group, index, items, renderRow, addresses, couriers, fulfillmentOptions, canRemove,
-  onRemove, onSetFulfillment, onSetAddress, onSetShipping, onDropItem,
+  group, index, items, renderRow, addresses, couriers, stores, fulfillmentOptions, canRemove,
+  active, onActivate, isDropTarget, onRemove, onSetFulfillment, onSetAddress, onSetShipping, onSetPickupStore,
 }) {
-  const [dragOver, setDragOver] = React.useState(false);
-  const { needsAddress, needsCourier } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
+  const { needsAddress, needsCourier, needsTravelFee, needsPickupBranch } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
 
   return (
     <div
-      style={cartStyles.shipGroupCard(dragOver)}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        const itemId = e.dataTransfer.getData('text/plain');
-        if (itemId) onDropItem(itemId, group.id);
-      }}
+      data-ship-group-id={group.id}
+      style={cartStyles.shipGroupCard(isDropTarget, active)}
+      onClick={onActivate}
     >
       <div style={cartStyles.shipGroupHead}>
         <span style={cartStyles.shipGroupLabel}>คำสั่งขายกลุ่ม {index + 1}</span>
+        {active && <span style={cartStyles.shipGroupActiveBadge}>กำลังเพิ่มสินค้า</span>}
         <span style={cartStyles.shipGroupCount}>{items.length} รายการ</span>
         {canRemove && (
           <button
             style={cartStyles.shipGroupRemove}
-            onClick={onRemove}
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
             aria-label="Remove ship group"
           >
             <Icon name="x" size={16} />
@@ -1339,6 +1580,14 @@ function ShipGroupCard({
         />
       )}
 
+      {needsTravelFee && (
+        <TravelFeeRow fee={group.fee} setFee={(fee) => onSetShipping({ fee })} />
+      )}
+
+      {needsPickupBranch && (
+        <PickupBranchSelector storeId={group.pickupStoreId} stores={stores} items={items} onSelect={onSetPickupStore} />
+      )}
+
       <div style={cartStyles.shipGroupItems}>
         {items.length === 0 ? (
           <div style={cartStyles.shipGroupItemsEmpty}>
@@ -1354,25 +1603,30 @@ function ShipGroupCard({
 
 // Main-pane version of a group — read-only, just enough to shop by: group
 // number, item count, fulfillment type, total, and courier/fee if it ships.
-// No address, no item list, no "active" state (that's what the drawer's own
-// focus is for). Only action here is deleting the group; everything else —
-// including opening the drawer — is behind the ">" chevron.
-function ShipGroupSummaryCard({ group, index, items, couriers, fulfillmentOptions, canRemove, onRemove, onOpen }) {
-  const { fulfillment, needsCourier } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
+// Mirrors the drawer's active highlight (see ShipGroupCard) so which group
+// new taps land in is still clear once the drawer is closed — clicking the
+// card itself also focuses it, same as in the drawer, without opening it.
+// Only other action here is deleting the group; everything else — including
+// opening the drawer — is behind the ">" chevron.
+function ShipGroupSummaryCard({ group, index, items, couriers, stores, fulfillmentOptions, canRemove, active, onActivate, onRemove, onOpen }) {
+  const { fulfillment, needsCourier, needsTravelFee, needsPickupBranch } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const courier = couriers.find(c => c.id === group.courierId);
   const feeText = group.fee !== '' && group.fee != null ? `฿${Number(group.fee).toLocaleString()}` : 'ไม่ระบุค่าส่ง';
+  const travelFeeText = group.fee !== '' && group.fee != null ? `฿${Number(group.fee).toLocaleString()}` : 'ไม่ระบุค่าเดินทาง';
+  const pickupStore = stores.find(s => s.id === group.pickupStoreId);
 
   return (
-    <div style={cartStyles.shipGroupSummaryCard}>
+    <div style={cartStyles.shipGroupSummaryCard(active)} onClick={onActivate}>
       <div style={cartStyles.shipGroupSummaryTop}>
         <span style={cartStyles.shipGroupLabel}>คำสั่งขายกลุ่ม {index + 1}</span>
+        {active && <span style={cartStyles.shipGroupActiveBadge}>กำลังเพิ่มสินค้า</span>}
         {canRemove && (
-          <button style={cartStyles.shipGroupRemove} onClick={onRemove} aria-label="Remove ship group">
+          <button style={cartStyles.shipGroupRemove} onClick={(e) => { e.stopPropagation(); onRemove(); }} aria-label="Remove ship group">
             <Icon name="x" size={16} />
           </button>
         )}
-        <button style={cartStyles.shipGroupSummaryOpen} onClick={onOpen} aria-label="Manage group">
+        <button style={cartStyles.shipGroupSummaryOpen} onClick={(e) => { e.stopPropagation(); onOpen(); }} aria-label="Manage group">
           <Icon name="chevR" size={16} color="var(--text-tertiary)" />
         </button>
       </div>
@@ -1385,6 +1639,16 @@ function ShipGroupSummaryCard({ group, index, items, couriers, fulfillmentOption
       {needsCourier && (
         <div style={cartStyles.shipGroupSummaryMeta}>
           {courier ? courier.label : 'ยังไม่ระบุขนส่ง'} · {feeText}
+        </div>
+      )}
+
+      {needsTravelFee && (
+        <div style={cartStyles.shipGroupSummaryMeta}>ค่าเดินทาง · {travelFeeText}</div>
+      )}
+
+      {needsPickupBranch && (
+        <div style={cartStyles.shipGroupSummaryMeta}>
+          {pickupStore ? `รับที่สาขา ${pickupStore.label}` : 'ยังไม่ระบุสาขาที่รับ'}
         </div>
       )}
 
@@ -1404,8 +1668,8 @@ function ShipGroupSummaryCard({ group, index, items, couriers, fulfillmentOption
 // products into it", since the product grid needs to stay clickable while
 // this is open.
 function GroupManagerDrawer({
-  open, onClose, shipGroups, cart, renderRow, addresses, couriers, fulfillmentOptions,
-  addShipGroup, removeShipGroup, setGroupField, setItemGroup,
+  open, onClose, shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions,
+  activeGroupId, setActiveGroupId, dragOverGroupId, addShipGroup, removeShipGroup, setGroupField,
 }) {
   // Mounted a beat longer than `open` so the close transition can play
   // before the drawer leaves the DOM — otherwise it would just vanish.
@@ -1450,13 +1714,17 @@ function GroupManagerDrawer({
             renderRow={renderRow}
             addresses={addresses}
             couriers={couriers}
+            stores={stores}
             fulfillmentOptions={fulfillmentOptions}
             canRemove={shipGroups.length > 1}
+            active={g.id === activeGroupId}
+            onActivate={() => setActiveGroupId(g.id)}
+            isDropTarget={g.id === dragOverGroupId}
             onRemove={() => removeShipGroup(g.id)}
             onSetFulfillment={(fid) => setGroupField(g.id, { fulfillmentId: fid })}
             onSetAddress={(aid) => setGroupField(g.id, { addressId: aid })}
             onSetShipping={(patch) => setGroupField(g.id, patch)}
-            onDropItem={setItemGroup}
+            onSetPickupStore={(sid) => setGroupField(g.id, { pickupStoreId: sid })}
           />
         ))}
         {/* Adding a group here (bottom) rather than at the top means it

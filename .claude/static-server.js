@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = '/Users/montira/Desktop/KWANG/Patona 2';
+const ROOT = path.resolve(__dirname, '..');
 const PORT = 8934;
 
 const MIME = {

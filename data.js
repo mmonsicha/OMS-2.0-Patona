@@ -7,9 +7,10 @@
 // item (installation, repair — always an on-site visit) or a digital item
 // (never physically shipped) can each get the right one regardless of
 // channel: ON_SITE always needs an address (no courier — staff visits in
-// person), DIGITAL never needs an address or a courier.
+// person — but does take a flat travel fee instead), DIGITAL never needs
+// an address, courier, or travel fee.
 const UNIVERSAL_FULFILLMENT = [
-  { id: 'ON_SITE', label: 'ให้บริการที่สถานที่ลูกค้า', sub: 'งานบริการ เช่น ติดตั้ง/ซ่อม', icon: 'truck',   needsAddress: true,  needsCourier: false },
+  { id: 'ON_SITE', label: 'ให้บริการที่สถานที่ลูกค้า', sub: 'งานบริการ เช่น ติดตั้ง/ซ่อม', icon: 'truck',   needsAddress: true,  needsCourier: false, needsTravelFee: true },
   { id: 'DIGITAL', label: 'จัดส่งเข้าระบบ (ดิจิทัล)',   sub: 'ไม่ต้องมีที่อยู่/ไม่ต้องนัดรับ', icon: 'sparkle', needsAddress: false, needsCourier: false },
 ];
 
@@ -22,7 +23,7 @@ window.SALE_DATA = {
       icon: 'store',
       fulfillment: [
         { id: 'PICKUP_IMMEDIATE', label: 'รับทันที',      sub: 'รับสินค้าพร้อมลูกค้า',   icon: 'bag',   needsAddress: false, needsCourier: false },
-        { id: 'PICKUP_DEFERRED', label: 'รับภายหลัง',     sub: 'เก็บไว้ให้ลูกค้า',       icon: 'clock', needsAddress: false, needsCourier: false },
+        { id: 'PICKUP_DEFERRED', label: 'รับภายหลัง',     sub: 'เก็บไว้ให้ลูกค้า',       icon: 'clock', needsAddress: false, needsCourier: false, needsPickupBranch: true },
         { id: 'SHIP_FROM_STORE', label: 'จัดส่งจากร้าน',  sub: 'จัดส่งตามที่อยู่',       icon: 'truck', needsAddress: true,  needsCourier: true },
         ...UNIVERSAL_FULFILLMENT,
       ],
@@ -167,3 +168,21 @@ window.SALE_DATA = {
     { id: 's04', label: 'Patona — EmQuartier',     hours: 'Open · until 22:00' },
   ],
 };
+
+// Per-branch stock for the "รับภายหลัง" (pickup later) branch picker — a
+// customer can only pick a branch that actually has their order in stock.
+// `stock` above stays exactly what it always was (the count shown on the
+// product grid, for the branch the cashier is currently in — s01), so this
+// only fills in the OTHER branches, derived rather than hand-authored for
+// every product. The factor rotates per product (by index) so it isn't
+// always the same branch running out — one of the three is always at 0 so
+// the "can't select a branch with no stock" rule has something to show.
+const OTHER_BRANCH_STOCK_FACTORS = [0.55, 0.3, 0];
+window.SALE_DATA.products.forEach((p, i) => {
+  const otherStores = window.SALE_DATA.stores.filter(s => s.id !== 's01');
+  p.stockByStore = { s01: p.stock };
+  otherStores.forEach((s, si) => {
+    const factor = OTHER_BRANCH_STOCK_FACTORS[(si + i) % OTHER_BRANCH_STOCK_FACTORS.length];
+    p.stockByStore[s.id] = Math.round(p.stock * factor);
+  });
+});

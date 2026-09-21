@@ -51,6 +51,7 @@ const Icon = ({ name, size = 18, color = 'currentColor' }) => {
     receipt: <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
     location: <><path d="M12 22s8-7 8-13a8 8 0 10-16 0c0 6 8 13 8 13z" /><circle cx="12" cy="9" r="3" /></>,
     settings: <><path d="M12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z" /><path d="m19.4 15 1.5 1-2 3.4-1.8-.6a8 8 0 01-1.6 1l-.4 1.9h-4l-.4-1.9a8 8 0 01-1.6-1l-1.8.6-2-3.4 1.5-1a8 8 0 010-2L4.5 9l2-3.4 1.8.6a8 8 0 011.6-1L10.3 3h4l.4 1.9a8 8 0 011.6 1l1.8-.6 2 3.4-1.5 1a8 8 0 010 2z" /></>,
+    grip:  <>{[6, 12, 18].flatMap(cy => [9, 15].map(cx => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.4" fill="currentColor" stroke="none" />))}</>,
   };
   return <svg {...common} aria-hidden="true">{paths[name] || paths.dots}</svg>;
 };

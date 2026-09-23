@@ -585,6 +585,35 @@ function App() {
       return next;
     });
   };
+  // Pickup-branch shortfall fix (see PickupStockWarning in cart.jsx) — pulls
+  // just the short line out into a brand-new group picked up from whichever
+  // branch actually has it, instead of forcing the whole order to move or
+  // the customer to accept a substitute. Sets the new group's fulfillment
+  // directly rather than through setItemGroup, since that would re-suggest
+  // it from the channel default the moment the (now-empty) group gets its
+  // first item, clobbering the PICKUP_DEFERRED + branch this exists for.
+  const splitToBranch = (lineId, pickupStoreId) => {
+    const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
+    setShipGroups(gs => [...gs, {
+      id: newId, addressId: null, courierId: null, fee: '', pickupStoreId,
+      fulfillmentId: 'PICKUP_DEFERRED',
+    }]);
+    setCart(prev => prev.map(i => i.lineId === lineId ? { ...i, groupId: newId } : i));
+    setGroupOrderMode(true);
+    setActiveGroupId(newId);
+  };
+  // Outside group-order mode there's exactly one group (shipGroups[0]), and
+  // the header's fulfillment dropdown was only ever writing the separate
+  // global `fulfillment` state — shipGroups[0].fulfillmentId sat stale at
+  // whatever it was created with. Invisible while everything stayed in the
+  // single-group flow (nothing there reads the group's own field), but the
+  // moment something switches into group-order mode — splitToBranch above,
+  // or just tapping "สร้างคำสั่งขายกลุ่ม" — the drawer starts trusting that
+  // stale field and shows the wrong fulfillment. Keep them in sync instead.
+  const onChangeFulfillment = (fid) => {
+    setFulfillment(fid);
+    setShipGroups(prev => prev.map((g, i) => i === 0 ? { ...g, fulfillmentId: fid } : g));
+  };
   const [checkoutOpen, setCheckoutOpen] = React.useState(false);
   const [notifOpen, setNotifOpen]     = React.useState(false);
   const [profileOpen, setProfileOpen] = React.useState(false);
@@ -614,6 +643,20 @@ function App() {
       ...g,
       fulfillmentId: suggestFulfillmentId(ch, cart.filter(i => i.groupId === g.id)),
     })));
+  };
+
+  // Some marketplace sub-channels mandate their own courier for the whole
+  // order — Shopee ships only via SPX, Lazada only via LEX (see data.js'
+  // `fixedCourierId`) — a seller can't pick anything else for those, so
+  // picking one of these sub-channels immediately locks every group's
+  // courier to it rather than leaving the old choice sitting there wrong.
+  const onChangeSubChannel = (sid) => {
+    setSubChannel(sid);
+    const ch = D.channels.find(c => c.id === channel);
+    const sub = ch.subChannels && ch.subChannels.find(s => s.id === sid);
+    if (sub && sub.fixedCourierId) {
+      setShipGroups(prev => prev.map(g => ({ ...g, courierId: sub.fixedCourierId })));
+    }
   };
 
   // Digital items never share a group with physical/service ones — always
@@ -716,9 +759,9 @@ function App() {
     channel,
     setChannel: onChangeChannel,
     fulfillment,
-    setFulfillment,
+    setFulfillment: onChangeFulfillment,
     subChannel,
-    setSubChannel,
+    setSubChannel: onChangeSubChannel,
     payment,
     setPayment,
     paymentMethods: D.paymentMethods,
@@ -754,6 +797,7 @@ function App() {
     removeShipGroup,
     setGroupField,
     setItemGroup,
+    splitToBranch,
     activeGroupId,
     setActiveGroupId,
   };

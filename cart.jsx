@@ -376,6 +376,34 @@ const cartStyles = {
     color: 'var(--text-tertiary)',
     padding: '8px 10px 4px',
   },
+  // Explanatory note in place of a picker — e.g. "this channel only ships
+  // via SPX" — where the field would normally be, so it reads as a plain
+  // fact rather than a warning.
+  fixedNote: {
+    display: 'flex', alignItems: 'flex-start', gap: 6,
+    padding: '6px 10px 8px',
+    fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.4,
+  },
+  // Pickup-branch stock shortfall (see PickupStockWarning) — amber, not
+  // rose/red, since it's not a hard error: there's always a next step
+  // (split to another branch) right there in the same box.
+  stockWarnBox: {
+    display: 'flex', flexDirection: 'column', gap: 8,
+    background: 'var(--amber-50)',
+    border: '1px solid #FEDF89',
+    borderRadius: 'var(--d-radius)',
+    padding: '10px 12px',
+  },
+  stockWarnRow: {
+    display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+  },
+  stockWarnIcon: { color: 'var(--amber-600)', display: 'flex', flexShrink: 0 },
+  stockWarnText: { fontSize: 'var(--fs-caption)', color: 'var(--amber-700)', flex: '1 1 auto', minWidth: 160 },
+  stockWarnAction: {
+    appearance: 'none', border: '1px solid #FEDF89', background: 'var(--bg-surface)',
+    color: 'var(--amber-700)', fontWeight: 600, fontSize: 11,
+    borderRadius: 999, padding: '4px 10px', cursor: 'pointer', flexShrink: 0,
+  },
   // `disabled` (e.g. a pickup branch with no stock for the group) dims the
   // row and swaps in a not-allowed cursor — still visible in the list (so
   // it's clear the branch exists, just can't be picked) rather than hidden.
@@ -705,10 +733,15 @@ function Cart({
   memberDiscount, manualDiscount, orderNote,
   onOpenDiscount, onOpenNote, onRemoveDiscount, onRemoveNote,
   couriers, shipGroups, groupOrderMode, enableGroupOrderMode,
-  addShipGroup, removeShipGroup, setGroupField, setItemGroup,
+  addShipGroup, removeShipGroup, setGroupField, setItemGroup, splitToBranch,
   activeGroupId, setActiveGroupId,
 }) {
   const ch = channels.find(c => c.id === channel);
+  // Some marketplace sub-channels mandate their own courier for the whole
+  // order (Shopee → SPX, Lazada → LEX) — applies order-wide, not per group,
+  // since the sub-channel describes where the WHOLE order came from.
+  const activeSubChannel = ch.subChannels && ch.subChannels.find(s => s.id === subChannel);
+  const fixedCourierId = (activeSubChannel && activeSubChannel.fixedCourierId) || null;
   const paneStyle = {
     ...cartStyles.pane,
     ...(density === 'compact' ? cartStyles.paneCompact : {}),
@@ -935,6 +968,7 @@ function Cart({
                   shipping={{ courierId: shipGroups[0].courierId, fee: shipGroups[0].fee }}
                   setShipping={(patch) => setGroupField(shipGroups[0].id, patch)}
                   couriers={couriers}
+                  fixedCourierId={fixedCourierId}
                 />
               )}
               {currentFulfillment.needsTravelFee && (
@@ -954,6 +988,12 @@ function Cart({
                 stores={stores}
                 items={cart}
                 onSelect={(sid) => setGroupField(shipGroups[0].id, { pickupStoreId: sid })}
+              />
+              <PickupStockWarning
+                storeId={shipGroups[0].pickupStoreId}
+                stores={stores}
+                items={cart}
+                onSplitToBranch={splitToBranch}
               />
             </div>
           )}
@@ -1105,12 +1145,14 @@ function Cart({
           couriers={couriers}
           stores={stores}
           fulfillmentOptions={ch.fulfillment}
+          fixedCourierId={fixedCourierId}
           activeGroupId={activeGroupId}
           setActiveGroupId={setActiveGroupId}
           dragOverGroupId={dragOverGroupId}
           addShipGroup={addShipGroup}
           removeShipGroup={removeShipGroup}
           setGroupField={setGroupField}
+          splitToBranch={splitToBranch}
         />
       )}
 
@@ -1384,15 +1426,26 @@ function AddressSelector({ address, addresses, onSelect }) {
 }
 
 // Figma "ข้อมูลการจัดส่ง" — courier + shipping fee, only relevant for
-// Online/LINK_BILL deliveries.
-function ShippingInfoRow({ shipping, setShipping, couriers }) {
+// Online/LINK_BILL deliveries. Couriers split into "จัดส่งมาตรฐาน" (standard
+// drop-off networks) and "จัดส่งภายในวัน" (Same Day — Grab/Lineman/Lalamove,
+// an on-demand rider) since they're picked for very different reasons.
+// `fixedCourierId` — set when the order's sub-channel is a marketplace that
+// mandates its own logistics (Shopee → SPX, Lazada → LEX, see data.js) —
+// locks the courier to it instead of leaving the list open, since a seller
+// can't actually choose a different one for those orders.
+function ShippingInfoRow({ shipping, setShipping, couriers, fixedCourierId }) {
   const [open, setOpen] = React.useState(false);
   const { anchorRef, popStyle } = usePopoverFit(open);
-  const courier = couriers.find(c => c.id === shipping.courierId);
+  const fixedCourier = fixedCourierId ? couriers.find(c => c.id === fixedCourierId) : null;
+  const courier = fixedCourier || couriers.find(c => c.id === shipping.courierId);
   const feeText = shipping.fee !== '' && shipping.fee != null
     ? `฿${Number(shipping.fee).toLocaleString()}`
     : 'ไม่ระบุค่าส่ง';
-  const summary = courier ? `จัดส่งโดย ${courier.label} | ${feeText}` : 'ระบุขนส่งและค่าจัดส่ง';
+  const summary = courier
+    ? `จัดส่งโดย ${courier.label}${fixedCourier ? ' (บังคับตามช่องทาง)' : ''} | ${feeText}`
+    : 'ระบุขนส่งและค่าจัดส่ง';
+  const standardCouriers = couriers.filter(c => c.category !== 'same_day');
+  const sameDayCouriers = couriers.filter(c => c.category === 'same_day');
 
   return (
     <div ref={anchorRef} style={cartStyles.popWrap}>
@@ -1414,23 +1467,53 @@ function ShippingInfoRow({ shipping, setShipping, couriers }) {
               onChange={(e) => setShipping({ ...shipping, fee: e.target.value })}
               style={cartStyles.shipFeeInput}
             />
-            <div style={cartStyles.popHd}>ขนส่งโดย</div>
-            {couriers.map(c => {
-              const active = c.id === shipping.courierId;
-              return (
-                <button
-                  key={c.id}
-                  style={cartStyles.popItem(active)}
-                  onClick={() => setShipping({ ...shipping, courierId: c.id })}
-                >
-                  <span style={cartStyles.popItemIcon('var(--gray-700)', active)}><Icon name="truck" size={13} /></span>
-                  <span style={cartStyles.popItemBody}>
-                    <span style={cartStyles.popItemLabel}>{c.label}</span>
-                  </span>
-                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
-                </button>
-              );
-            })}
+            {fixedCourier ? (
+              <div style={cartStyles.fixedNote}>
+                <Icon name="info" size={13} />
+                <span>ช่องทางนี้กำหนดให้จัดส่งโดย {fixedCourier.label} เท่านั้น</span>
+              </div>
+            ) : (
+              <>
+                <div style={cartStyles.popHd}>จัดส่งมาตรฐาน</div>
+                {standardCouriers.map(c => {
+                  const active = c.id === shipping.courierId;
+                  return (
+                    <button
+                      key={c.id}
+                      style={cartStyles.popItem(active)}
+                      onClick={() => setShipping({ ...shipping, courierId: c.id })}
+                    >
+                      <span style={cartStyles.popItemIcon('var(--gray-700)', active)}><Icon name="truck" size={13} /></span>
+                      <span style={cartStyles.popItemBody}>
+                        <span style={cartStyles.popItemLabel}>{c.label}</span>
+                      </span>
+                      {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                    </button>
+                  );
+                })}
+                {sameDayCouriers.length > 0 && (
+                  <>
+                    <div style={cartStyles.popHd}>จัดส่งภายในวัน (Same Day)</div>
+                    {sameDayCouriers.map(c => {
+                      const active = c.id === shipping.courierId;
+                      return (
+                        <button
+                          key={c.id}
+                          style={cartStyles.popItem(active)}
+                          onClick={() => setShipping({ ...shipping, courierId: c.id })}
+                        >
+                          <span style={cartStyles.popItemIcon('var(--amber-500)', active)}><Icon name="clock" size={13} /></span>
+                          <span style={cartStyles.popItemBody}>
+                            <span style={cartStyles.popItemLabel}>{c.label}</span>
+                          </span>
+                          {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+              </>
+            )}
           </div>
         </>
       )}
@@ -1478,14 +1561,19 @@ function TravelFeeRow({ fee, setFee }) {
 // that doesn't have enough of every item in the group is shown but disabled
 // — visible so it's clear the branch exists, just can't be picked for this
 // order, rather than silently missing from the list.
+// Shared by PickupBranchSelector and PickupStockWarning below — which of
+// this group's items a given branch doesn't have enough of.
+function missingItemsAt(items, sid) {
+  return items.filter(i => {
+    const available = i.stockByStore ? i.stockByStore[sid] : i.stock;
+    return available != null && available < i.qty;
+  });
+}
+
 function PickupBranchSelector({ storeId, stores, items, onSelect }) {
   const [open, setOpen] = React.useState(false);
   const { anchorRef, popStyle } = usePopoverFit(open);
   const store = stores.find(s => s.id === storeId) || null;
-  const hasStockAt = (sid) => items.every(i => {
-    const available = i.stockByStore ? i.stockByStore[sid] : i.stock;
-    return available == null || available >= i.qty;
-  });
 
   return (
     <div ref={anchorRef} style={cartStyles.popWrap}>
@@ -1503,7 +1591,10 @@ function PickupBranchSelector({ storeId, stores, items, onSelect }) {
             <div style={cartStyles.popHd}>สาขาที่รับสินค้า</div>
             {stores.map(s => {
               const active = s.id === storeId;
-              const available = hasStockAt(s.id);
+              const missing = missingItemsAt(items, s.id);
+              const available = missing.length === 0;
+              const missingNames = missing.slice(0, 2).map(i => i.name).join(', ')
+                + (missing.length > 2 ? ` และอีก ${missing.length - 2} รายการ` : '');
               return (
                 <button
                   key={s.id}
@@ -1515,7 +1606,7 @@ function PickupBranchSelector({ storeId, stores, items, onSelect }) {
                   <span style={cartStyles.popItemBody}>
                     <span style={cartStyles.popItemLabel}>{s.label}</span>
                     <span style={available ? cartStyles.popItemSub : cartStyles.popItemSubWarn}>
-                      {available ? s.hours : 'สินค้าไม่พอที่สาขานี้'}
+                      {available ? s.hours : `ไม่มี: ${missingNames}`}
                     </span>
                   </span>
                   {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
@@ -1529,6 +1620,49 @@ function PickupBranchSelector({ storeId, stores, items, onSelect }) {
   );
 }
 
+// Surfaces the same shortage the branch popover's disabled state hides
+// behind a click — e.g. ordering a phone in 3 colors for pickup at branch A,
+// which turns out to be out of black. Names exactly which item(s) fall
+// short and, if another branch has enough of that specific item, offers to
+// split just that line into its own group picked up from there instead of
+// forcing the whole order to move. Shows up even when the branch was valid
+// when first picked but a later item addition made it fall short.
+function PickupStockWarning({ storeId, stores, items, onSplitToBranch }) {
+  const missing = missingItemsAt(items, storeId);
+  if (missing.length === 0) return null;
+
+  const rows = missing.map(item => {
+    const altStore = stores.find(s => {
+      if (s.id === storeId) return false;
+      const available = item.stockByStore ? item.stockByStore[s.id] : item.stock;
+      return available != null && available >= item.qty;
+    });
+    return { item, altStore };
+  });
+
+  return (
+    <div style={cartStyles.stockWarnBox}>
+      {rows.map(({ item, altStore }) => (
+        <div key={item.lineId} style={cartStyles.stockWarnRow}>
+          <span style={cartStyles.stockWarnIcon}><Icon name="warn" size={14} /></span>
+          <span style={cartStyles.stockWarnText}>
+            <strong>{item.name}</strong> ไม่มีที่สาขานี้
+            {altStore ? ` — มีสต็อกที่ ${altStore.label}` : ' และไม่มีสต็อกที่สาขาอื่นเช่นกัน'}
+          </span>
+          {altStore && (
+            <button
+              style={cartStyles.stockWarnAction}
+              onClick={() => onSplitToBranch(item.lineId, altStore.id)}
+            >
+              แยกไปรับที่ {altStore.label}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // One "คำสั่งขายกลุ่ม" (sale-order group) within a group order — its own
 // address + courier + fee AND its own cart lines, all in one card, inside
 // the management drawer. Tapping the card (focus mode) makes it the active
@@ -1536,8 +1670,8 @@ function PickupBranchSelector({ storeId, stores, items, onSelect }) {
 // adds straight into it instead of wherever it last landed. Items can also
 // still be dragged from one card onto another to move them across groups.
 function ShipGroupCard({
-  group, index, items, renderRow, addresses, couriers, stores, fulfillmentOptions, canRemove,
-  active, onActivate, isDropTarget, onRemove, onSetFulfillment, onSetAddress, onSetShipping, onSetPickupStore,
+  group, index, items, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId, canRemove,
+  active, onActivate, isDropTarget, onRemove, onSetFulfillment, onSetAddress, onSetShipping, onSetPickupStore, onSplitToBranch,
 }) {
   const { needsAddress, needsCourier, needsTravelFee, needsPickupBranch } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
 
@@ -1577,6 +1711,7 @@ function ShipGroupCard({
           shipping={{ courierId: group.courierId, fee: group.fee }}
           setShipping={onSetShipping}
           couriers={couriers}
+          fixedCourierId={fixedCourierId}
         />
       )}
 
@@ -1585,7 +1720,10 @@ function ShipGroupCard({
       )}
 
       {needsPickupBranch && (
-        <PickupBranchSelector storeId={group.pickupStoreId} stores={stores} items={items} onSelect={onSetPickupStore} />
+        <>
+          <PickupBranchSelector storeId={group.pickupStoreId} stores={stores} items={items} onSelect={onSetPickupStore} />
+          <PickupStockWarning storeId={group.pickupStoreId} stores={stores} items={items} onSplitToBranch={onSplitToBranch} />
+        </>
       )}
 
       <div style={cartStyles.shipGroupItems}>
@@ -1668,8 +1806,8 @@ function ShipGroupSummaryCard({ group, index, items, couriers, stores, fulfillme
 // products into it", since the product grid needs to stay clickable while
 // this is open.
 function GroupManagerDrawer({
-  open, onClose, shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions,
-  activeGroupId, setActiveGroupId, dragOverGroupId, addShipGroup, removeShipGroup, setGroupField,
+  open, onClose, shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId,
+  activeGroupId, setActiveGroupId, dragOverGroupId, addShipGroup, removeShipGroup, setGroupField, splitToBranch,
 }) {
   // Mounted a beat longer than `open` so the close transition can play
   // before the drawer leaves the DOM — otherwise it would just vanish.
@@ -1716,6 +1854,7 @@ function GroupManagerDrawer({
             couriers={couriers}
             stores={stores}
             fulfillmentOptions={fulfillmentOptions}
+            fixedCourierId={fixedCourierId}
             canRemove={shipGroups.length > 1}
             active={g.id === activeGroupId}
             onActivate={() => setActiveGroupId(g.id)}
@@ -1725,6 +1864,7 @@ function GroupManagerDrawer({
             onSetAddress={(aid) => setGroupField(g.id, { addressId: aid })}
             onSetShipping={(patch) => setGroupField(g.id, patch)}
             onSetPickupStore={(sid) => setGroupField(g.id, { pickupStoreId: sid })}
+            onSplitToBranch={splitToBranch}
           />
         ))}
         {/* Adding a group here (bottom) rather than at the top means it

@@ -36,13 +36,17 @@ window.SALE_DATA = {
       icon: 'globe',
       // Sub-channels per PAT-2293 §"Sub-channel → OMS 2.0 channel Mapping" —
       // these become Order.channel on the backend (LINE chat → LINE_OA, etc).
+      // `fixedCourierId` — some marketplaces mandate their own logistics
+      // arm for anything shipped through them (Shopee → SPX, Lazada → LEX);
+      // a seller can't pick a different courier for those orders, so the
+      // cart locks the courier picker to it instead of leaving it open.
       subChannels: [
         { id: 'LINE_OA',      label: 'LINE OA',      hint: 'Chat',  color: '#06C755' },
         { id: 'FACEBOOK',     label: 'Facebook',     hint: 'Chat',  color: '#1877F2' },
         { id: 'INSTAGRAM',    label: 'Instagram',    hint: 'Chat',  color: '#E1306C' },
         { id: 'TIKTOK',       label: 'TikTok',       hint: 'Chat',  color: '#000000' },
-        { id: 'SHOPEE',       label: 'Shopee',       hint: 'Marketplace', color: '#EE4D2D' },
-        { id: 'LAZADA',       label: 'Lazada',       hint: 'Marketplace', color: '#0F1F8E' },
+        { id: 'SHOPEE',       label: 'Shopee',       hint: 'Marketplace', color: '#EE4D2D', fixedCourierId: 'shopee' },
+        { id: 'LAZADA',       label: 'Lazada',       hint: 'Marketplace', color: '#0F1F8E', fixedCourierId: 'lex' },
         { id: 'LINE_MY_SHOP', label: 'LINE My Shop', hint: 'Marketplace', color: '#00B900' },
         { id: 'ONLINE',       label: 'Storefront',   hint: 'Open API',    color: '#475467' },
         { id: 'OTHER_CHANNEL',label: 'Other',        hint: 'Unknown',     color: '#9CA3AF' },
@@ -133,12 +137,20 @@ window.SALE_DATA = {
     { id: 'dg04', sku: 'DIG-004', name: 'สมาชิก Patona+ รายเดือน',    cat: 'digital', price: 149,  stock: 999, swatch: '#12B76A' },
   ],
 
+  // `category` groups the courier picker into "จัดส่งมาตรฐาน" (next-day-ish,
+  // drop-off/pickup networks) vs "จัดส่งภายในวัน" (on-demand same-day apps —
+  // a rider is dispatched immediately, priced and timed completely
+  // differently, so they read as a distinct list rather than being mixed in
+  // alphabetically with the standard couriers).
   couriers: [
-    { id: 'shopee', label: 'Shopee Express' },
-    { id: 'kerry',  label: 'Kerry Express' },
-    { id: 'flash',  label: 'Flash Express' },
-    { id: 'ems',    label: 'ไปรษณีย์ไทย (EMS)' },
-    { id: 'grab',   label: 'Grab Express' },
+    { id: 'kerry',    label: 'Kerry Express',        category: 'standard' },
+    { id: 'flash',    label: 'Flash Express',        category: 'standard' },
+    { id: 'ems',      label: 'ไปรษณีย์ไทย (EMS)',      category: 'standard' },
+    { id: 'shopee',   label: 'Shopee Express (SPX)', category: 'standard' },
+    { id: 'lex',      label: 'LEX Express',          category: 'standard' },
+    { id: 'grab',     label: 'Grab',                 category: 'same_day' },
+    { id: 'lineman',  label: 'Lineman',              category: 'same_day' },
+    { id: 'lalamove', label: 'Lalamove',             category: 'same_day' },
   ],
 
   paymentMethods: {

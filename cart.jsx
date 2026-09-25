@@ -750,6 +750,24 @@ function groupFulfillmentNeeds(fulfillmentOptions, group, items) {
   return { fulfillment, needsAddress, needsCourier, needsTravelFee, needsPickupBranch };
 }
 
+// A line that's out of stock at the CURRENT branch (but not everywhere —
+// that's PreorderBanner's job) can't be handed over on the spot, so
+// "รับทันที"/"รับที่ร้าน" drop out of the dropdown entirely while one is in
+// the group — only รับภายหลัง (pick a branch that has it) or a courier
+// fulfillment still make sense. sale.jsx locks the group onto one of these
+// the moment such a line joins; this is what stops the cashier from
+// manually picking their way back to an option that no longer works.
+function restrictFulfillmentOptions(options, items, storeId) {
+  const hasLocalOut = items.some(i =>
+    i.cat === 'product'
+    && window.SALE_DATA.isOutOfStockAtBranch(i, storeId)
+    && !window.SALE_DATA.isOutOfStockEverywhere(i)
+  );
+  if (!hasLocalOut) return options;
+  const restricted = options.filter(f => f.id === 'PICKUP_DEFERRED' || f.needsCourier);
+  return restricted.length > 0 ? restricted : options;
+}
+
 function usePopoverFit(open) {
   const anchorRef = React.useRef(null);
   const [placement, setPlacement] = React.useState(null);
@@ -787,7 +805,7 @@ function Cart({
   subChannel, setSubChannel,
   payment, setPayment, paymentMethods,
   cart, setQty, removeItem, customer, customers, setCustomer, onAddCustomer,
-  addresses, stores,
+  addresses, stores, storeId,
   phone, setPhone,
   subtotal, vat, discount, total,
   selectorPattern, hideChannelHeader,
@@ -805,6 +823,9 @@ function Cart({
   // since the sub-channel describes where the WHOLE order came from.
   const activeSubChannel = ch.subChannels && ch.subChannels.find(s => s.id === subChannel);
   const fixedCourierId = (activeSubChannel && activeSubChannel.fixedCourierId) || null;
+  // Outside group-order mode there's just the one implicit group (the whole
+  // cart) — same lock as each ShipGroupCard applies per-group below.
+  const singleGroupFulfillment = restrictFulfillmentOptions(ch.fulfillment, cart, storeId);
   const paneStyle = {
     ...cartStyles.pane,
     ...(density === 'compact' ? cartStyles.paneCompact : {}),
@@ -1001,10 +1022,10 @@ function Cart({
                     onSelect={setSubChannel}
                     label={channel === 'LINK_BILL' ? 'Send via' : 'Source'}
                   />
-                  <FulfillmentDropdown options={ch.fulfillment} value={fulfillment} onSelect={setFulfillment} grow />
+                  <FulfillmentDropdown options={singleGroupFulfillment} value={fulfillment} onSelect={setFulfillment} grow />
                 </div>
               ) : (
-                <FulfillmentDropdown options={ch.fulfillment} value={fulfillment} onSelect={setFulfillment} />
+                <FulfillmentDropdown options={singleGroupFulfillment} value={fulfillment} onSelect={setFulfillment} />
               )}
             </div>
           )}
@@ -1255,6 +1276,7 @@ function Cart({
           stores={stores}
           fulfillmentOptions={ch.fulfillment}
           fixedCourierId={fixedCourierId}
+          storeId={storeId}
           activeGroupId={activeGroupId}
           setActiveGroupId={setActiveGroupId}
           dragOverGroupId={dragOverGroupId}
@@ -1360,7 +1382,12 @@ function SubChannelDropdown({ options, value, onSelect, label }) {
 function FulfillmentDropdown({ options, value, onSelect, grow }) {
   const [open, setOpen] = React.useState(false);
   const { anchorRef, popStyle } = usePopoverFit(open);
-  const current = options.find(o => o.id === value);
+  // Falls back to the first option rather than crashing on `current.icon`
+  // below — e.g. a locally-out line (see restrictFulfillmentOptions) can
+  // narrow the list out from under whatever was previously selected before
+  // sale.jsx's own re-lock catches up (a branch switch, not just adding the
+  // item, can trigger this).
+  const current = options.find(o => o.id === value) || options[0];
   return (
     <div ref={anchorRef} style={grow ? { ...cartStyles.popWrap, flex: '1 1 0' } : cartStyles.popWrap}>
       <button style={cartStyles.ddRow} onClick={() => setOpen(o => !o)}>
@@ -2017,11 +2044,12 @@ function PickupStockWarning({ storeId, stores, items, onSplitToBranch }) {
 // adds straight into it instead of wherever it last landed. Items can also
 // still be dragged from one card onto another to move them across groups.
 function ShipGroupCard({
-  group, index, items, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId, canRemove,
+  group, index, items, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId, storeId, canRemove,
   active, onActivate, isDropTarget, onRemove, onSetFulfillment, onSetAddress, onSetShipping, onSetPickupStore, onSplitToBranch,
   vehicleTypes, onSplitVehicles, onSplitBulky, onSplitPreorder, onMarkPreorder,
 }) {
-  const { needsAddress, needsCourier, needsTravelFee, needsPickupBranch } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
+  const groupFulfillmentOptions = restrictFulfillmentOptions(fulfillmentOptions, items, storeId);
+  const { needsAddress, needsCourier, needsTravelFee, needsPickupBranch } = groupFulfillmentNeeds(groupFulfillmentOptions, group, items);
 
   return (
     <div
@@ -2047,7 +2075,7 @@ function ShipGroupCard({
         )}
       </div>
 
-      <FulfillmentDropdown options={fulfillmentOptions} value={group.fulfillmentId} onSelect={onSetFulfillment} />
+      <FulfillmentDropdown options={groupFulfillmentOptions} value={group.fulfillmentId} onSelect={onSetFulfillment} />
 
       {/* Warns on the fulfillment that's currently NOT shipping — e.g.
           "รับทันที" — since that's the one that can't actually hand over a
@@ -2179,7 +2207,7 @@ function ShipGroupSummaryCard({ group, index, items, couriers, stores, fulfillme
 // this is open.
 function GroupManagerDrawer({
   open, onClose, customer, customers, setCustomer, onAddCustomer,
-  shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId,
+  shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId, storeId,
   activeGroupId, setActiveGroupId, dragOverGroupId, addShipGroup, removeShipGroup, setGroupField, splitToBranch,
   vehicleTypes, splitVehicleGroups, splitBulkyToShipping, splitPreorderItems,
 }) {
@@ -2237,6 +2265,7 @@ function GroupManagerDrawer({
             stores={stores}
             fulfillmentOptions={fulfillmentOptions}
             fixedCourierId={fixedCourierId}
+            storeId={storeId}
             canRemove={shipGroups.length > 1}
             active={g.id === activeGroupId}
             onActivate={() => setActiveGroupId(g.id)}

@@ -578,7 +578,22 @@ function App() {
     if (items.length > 0 && items.every(i => i.cat === 'product' && D.isOutOfStockEverywhere(i))) {
       return (ch.fulfillment.find(f => f.needsCourier) || ch.fulfillment[0]).id;
     }
+    // Out at THIS branch but not everywhere (see isOutOfStockAtBranch) —
+    // there's nothing to hand over today, so lock onto รับภายหลัง (the
+    // cashier still picks which OTHER branch, via the existing
+    // PickupBranchSelector/PickupStockWarning flow) or, if this channel
+    // doesn't offer that, straight to a courier fulfillment.
+    if (items.some(i => i.cat === 'product' && D.isOutOfStockAtBranch(i, storeId) && !D.isOutOfStockEverywhere(i))) {
+      return (ch.fulfillment.find(f => f.id === 'PICKUP_DEFERRED') || ch.fulfillment.find(f => f.needsCourier) || ch.fulfillment[0]).id;
+    }
     return ch.fulfillment[0].id;
+  };
+  // Whether a group's CURRENT fulfillment still makes sense once it holds a
+  // locally-out line — "รับทันที"/"รับที่ร้าน" assume the shelf here has it,
+  // which is exactly what isOutOfStockAtBranch says it doesn't.
+  const isFulfillmentLockedOut = (ch, fulfillmentId) => {
+    const f = ch.fulfillment.find(x => x.id === fulfillmentId);
+    return !f || (f.id !== 'PICKUP_DEFERRED' && !f.needsCourier);
   };
   // Drag-and-drop between groups (in the drawer) — blocked if it would mix
   // a digital item into a group with non-digital items or vice versa; the
@@ -611,9 +626,16 @@ function App() {
       const next = prev.map(i => i.lineId === lineId ? { ...i, groupId } : i);
       // A service item dropped into a group always makes it an on-site
       // visit, whether the group was empty or already had other items —
-      // same rule as addToCart below.
+      // same rule as addToCart below. Same for a locally-out line landing
+      // in a group whose current fulfillment can't hand it over (see
+      // isFulfillmentLockedOut).
       const ch = D.channels.find(c => c.id === channel);
-      const forced = movingItem.cat === 'service' ? 'ON_SITE' : (wasEmpty ? suggestFulfillmentId(ch, [movingItem]) : null);
+      const movingIsLocalOut = movingItem.cat === 'product' && D.isOutOfStockAtBranch(movingItem, storeId) && !movingIsPreorder;
+      const needsLock = !wasEmpty && movingIsLocalOut && targetGroup && isFulfillmentLockedOut(ch, targetGroup.fulfillmentId);
+      const forced = movingItem.cat === 'service' ? 'ON_SITE'
+        : wasEmpty ? suggestFulfillmentId(ch, [movingItem])
+        : needsLock ? suggestFulfillmentId(ch, [movingItem])
+        : null;
       if (forced) {
         setShipGroups(gs => gs.map(g => g.id === groupId ? { ...g, fulfillmentId: forced } : g));
         if (!groupOrderMode) setFulfillment(forced);
@@ -763,6 +785,27 @@ function App() {
     document.documentElement.dataset.theme   = t.theme;
   }, [t.density, t.theme]);
 
+  // addToCart/setItemGroup re-lock a group's fulfillment the moment a
+  // locally-out line JOINS it, but switching branches (StoreSwitcher) can
+  // turn an already-in-cart line locally-out without either of those firing
+  // — same lock, applied retroactively here instead. Deliberately keyed
+  // only on `storeId`, not `cart`: the join-time checks above already cover
+  // every case a cart change on its own would trigger.
+  React.useEffect(() => {
+    const ch = D.channels.find(c => c.id === channel);
+    if (!ch) return;
+    setShipGroups(prev => prev.map((g, gi) => {
+      const items = cart.filter(i => i.groupId === g.id);
+      if (items.length === 0) return g;
+      const hasLocalOut = items.some(i => i.cat === 'product' && D.isOutOfStockAtBranch(i, storeId) && !D.isOutOfStockEverywhere(i));
+      if (!hasLocalOut || !isFulfillmentLockedOut(ch, g.fulfillmentId)) return g;
+      const fulfillmentId = suggestFulfillmentId(ch, items);
+      if (gi === 0 && !groupOrderMode) setFulfillment(fulfillmentId);
+      return { ...g, fulfillmentId };
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId]);
+
   const onChangeChannel = (cid) => {
     setChannel(cid);
     const ch = D.channels.find(c => c.id === cid);
@@ -869,7 +912,18 @@ function App() {
         // needs a technician visit". Non-service items only get a fresh
         // suggestion when they're the first thing in an empty group, so
         // they never fight a fulfillment the cashier already picked.
-        const forced = p.cat === 'service' ? 'ON_SITE' : (wasEmpty ? suggestFulfillmentId(ch, [p]) : null);
+        const isLocalOut = p.cat === 'product' && D.isOutOfStockAtBranch(p, storeId) && !D.isOutOfStockEverywhere(p);
+        const currentGroup = shipGroups.find(g => g.id === groupId);
+        // Joining an already-non-empty group: only re-lock the fulfillment
+        // if this new line makes the group's CURRENT pick invalid — a group
+        // already on delivery/รับภายหลัง doesn't need to be touched, and one
+        // already holding another locally-out line was locked when THAT
+        // line joined.
+        const needsLock = !wasEmpty && isLocalOut && currentGroup && isFulfillmentLockedOut(ch, currentGroup.fulfillmentId);
+        const forced = p.cat === 'service' ? 'ON_SITE'
+          : wasEmpty ? suggestFulfillmentId(ch, [p])
+          : needsLock ? suggestFulfillmentId(ch, [p])
+          : null;
         if (forced) {
           setShipGroups(gs => gs.map(g => g.id === groupId
             ? { ...g, fulfillmentId: forced }
@@ -930,6 +984,7 @@ function App() {
     onAddCustomer: addCustomer,
     addresses: currentCustomer.addresses,
     stores: D.stores,
+    storeId,
     phone,
     setPhone,
     subtotal,

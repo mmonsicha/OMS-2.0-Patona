@@ -279,3 +279,15 @@ window.SALE_DATA.isOutOfStockEverywhere = function (item) {
   if (item.stockByStore) return Object.values(item.stockByStore).every(v => (v || 0) <= 0);
   return (item.stock || 0) <= 0;
 };
+
+// Just THIS branch's shelf, not the "anywhere" check above — the trigger
+// for cart.jsx/sale.jsx's fulfillment lock: an item that's out here but not
+// everywhere can't be handed over on the spot ("รับทันที"/"รับที่ร้าน"), but
+// is still a completely normal sale via รับภายหลัง (pick a branch that has
+// it) or จัดส่ง, so it's a separate check from the pre-order one above, not
+// a stricter version of it.
+window.SALE_DATA.isOutOfStockAtBranch = function (item, storeId) {
+  if (!item) return false;
+  const v = item.stockByStore ? item.stockByStore[storeId] : item.stock;
+  return (v || 0) <= 0;
+};

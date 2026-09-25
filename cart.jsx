@@ -404,6 +404,25 @@ const cartStyles = {
     color: 'var(--amber-700)', fontWeight: 600, fontSize: 11,
     borderRadius: 999, padding: '4px 10px', cursor: 'pointer', flexShrink: 0,
   },
+  // Pre-order's two-choice row (split vs. wait together) — one filled
+  // button (the split, since it gets the ready items out the door sooner)
+  // and one ghost button, rather than two look-alike stockWarnAction pills
+  // that read as equally weighted when they aren't.
+  preorderActions: { display: 'flex', flexWrap: 'wrap', gap: 8 },
+  stockWarnActionGhost: {
+    appearance: 'none', border: '1px solid #FEDF89', background: 'transparent',
+    color: 'var(--amber-700)', fontWeight: 600, fontSize: 11,
+    borderRadius: 999, padding: '4px 10px', cursor: 'pointer', flexShrink: 0,
+  },
+  preorderBadge: {
+    fontSize: 11, fontWeight: 600,
+    color: 'var(--amber-700)',
+    background: 'var(--amber-50)',
+    border: '1px solid #FEDF89',
+    borderRadius: 999, padding: '3px 9px',
+    flexShrink: 0, whiteSpace: 'nowrap',
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+  },
   // `disabled` (e.g. a pickup branch with no stock for the group) dims the
   // row and swaps in a not-allowed cursor — still visible in the list (so
   // it's clear the branch exists, just can't be picked) rather than hidden.
@@ -438,6 +457,38 @@ const cartStyles = {
     background: 'var(--brand-500)', color: '#fff',
     display: 'grid', placeItems: 'center', flexShrink: 0,
   },
+  // "+ เพิ่มลูกค้าใหม่" — a walk-in with no membership record still needs a
+  // name/phone attached the moment the order needs delivery (from-store or
+  // standard courier), so this sits right above the existing-customer list
+  // rather than sending the cashier off to a separate customer screen.
+  popAddBtn: {
+    appearance: 'none', border: '1px dashed var(--stroke-strong, var(--stroke))',
+    background: 'transparent', borderRadius: 8,
+    padding: '8px 10px', marginBottom: 2,
+    display: 'flex', alignItems: 'center', gap: 8,
+    cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', width: '100%',
+    color: 'var(--brand-600, var(--brand-500))', fontWeight: 600, fontSize: 'var(--fs-body)',
+  },
+  popAddBtnIcon: {
+    width: 26, height: 26, borderRadius: 7,
+    background: 'var(--brand-50)', color: 'var(--brand-600, var(--brand-500))',
+    display: 'grid', placeItems: 'center', flexShrink: 0,
+  },
+  popForm: { display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 6px 8px' },
+  popFormField: { display: 'flex', flexDirection: 'column', gap: 4 },
+  popFormLabel: { fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)' },
+  popFormActions: { display: 'flex', gap: 8, marginTop: 2 },
+  popFormCancel: {
+    appearance: 'none', border: '1px solid var(--stroke)', background: 'var(--bg-surface)',
+    color: 'var(--text-secondary)', fontWeight: 600, fontSize: 'var(--fs-body-sm)',
+    borderRadius: 999, padding: '8px 14px', cursor: 'pointer', flex: 1,
+  },
+  popFormSave: {
+    appearance: 'none', border: 0, background: 'var(--brand-500)',
+    color: '#fff', fontWeight: 600, fontSize: 'var(--fs-body-sm)',
+    borderRadius: 999, padding: '8px 14px', cursor: 'pointer', flex: 1,
+  },
+  popFormSaveDisabled: { opacity: 0.5, cursor: 'not-allowed' },
 
   items: {
     padding: '4px var(--d-pad-page)',
@@ -496,12 +547,23 @@ const cartStyles = {
   }),
   rowInfo: { display: 'flex', flexDirection: 'column', minWidth: 0, gap: 2 },
   rowName: {
+    display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
     fontSize: 'var(--fs-body)', fontWeight: 600, color: 'var(--text-primary)',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  rowNameText: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
   },
   rowLine: {
     display: 'flex', alignItems: 'center', gap: 6,
     fontSize: 'var(--fs-caption)', color: 'var(--text-tertiary)',
+  },
+  rowBulkyBadge: {
+    display: 'inline-flex', alignItems: 'center', gap: 3,
+    padding: '1px 6px 1px 5px', borderRadius: 999,
+    background: 'var(--amber-50, #fffaeb)', border: '1px solid var(--amber-200, #fedf89)',
+    color: 'var(--amber-700, #b54708)',
+    fontSize: 'var(--fs-micro, 10px)', fontWeight: 600, lineHeight: 1.6,
+    flexShrink: 0, whiteSpace: 'nowrap',
   },
   rowPrice: {
     display: 'flex', flexDirection: 'column',
@@ -724,7 +786,7 @@ function Cart({
   fulfillment, setFulfillment,
   subChannel, setSubChannel,
   payment, setPayment, paymentMethods,
-  cart, setQty, removeItem, customer, customers, setCustomer,
+  cart, setQty, removeItem, customer, customers, setCustomer, onAddCustomer,
   addresses, stores,
   phone, setPhone,
   subtotal, vat, discount, total,
@@ -734,6 +796,7 @@ function Cart({
   onOpenDiscount, onOpenNote, onRemoveDiscount, onRemoveNote,
   couriers, shipGroups, groupOrderMode, enableGroupOrderMode,
   addShipGroup, removeShipGroup, setGroupField, setItemGroup, splitToBranch,
+  splitBulkyToShipping, splitVehicleGroups, vehicleTypes, splitPreorderItems,
   activeGroupId, setActiveGroupId,
 }) {
   const ch = channels.find(c => c.id === channel);
@@ -846,6 +909,8 @@ function Cart({
     const lineTotal = item.price * item.qty;
     const initials = item.name.split(' ').slice(0, 2).map(s => s[0]).join('').toUpperCase();
     const isDragging = dragLineId === item.lineId;
+    const isBulky = window.SALE_DATA.isBulkyItem(item);
+    const isOutOfStock = item.cat === 'product' && window.SALE_DATA.isOutOfStockEverywhere(item);
     return (
       <div key={item.lineId} style={cartStyles.row(isDragging, groupOrderMode)}>
         {groupOrderMode && (
@@ -862,7 +927,19 @@ function Cart({
         )}
         <div style={cartStyles.rowSwatch(item.swatch)}>{initials}</div>
         <div style={cartStyles.rowInfo}>
-          <span style={cartStyles.rowName}>{item.name}</span>
+          <span style={cartStyles.rowName}>
+            <span style={cartStyles.rowNameText}>{item.name}</span>
+            {isBulky && (
+              <span style={cartStyles.rowBulkyBadge} title="ชิ้นใหญ่/หนัก แนะนำให้แยกจัดส่ง">
+                <Icon name="scale" size={10} /> แยกจัดส่ง
+              </span>
+            )}
+            {isOutOfStock && (
+              <span style={cartStyles.rowBulkyBadge} title="หมดสต๊อกทุกสาขา — สั่งพรีออเดอร์ได้">
+                <Icon name="clock" size={10} /> พรีออเดอร์
+              </span>
+            )}
+          </span>
           <div style={cartStyles.rowLine}>
             <span>฿{item.price.toLocaleString()}</span>
             <span>·</span>
@@ -949,8 +1026,33 @@ function Cart({
                 </button>
               )}
             </div>
-            <CustomerRow customer={customer} customers={customers} onSelect={setCustomer} />
+            <CustomerRow customer={customer} customers={customers} onSelect={setCustomer} onAddCustomer={onAddCustomer} />
           </div>
+
+          {/* Warns on the CURRENT fulfillment when it isn't shipping — e.g.
+              "รับทันที" — since that's the one that can't actually hand a
+              bulky item over the counter conveniently. Nothing to suggest
+              once a courier fulfillment is already picked below. */}
+          {!groupOrderMode && !currentFulfillment.needsCourier && (
+            <div style={cartStyles.formBlock}>
+              <BulkyItemBanner items={cart} onSplit={splitBulkyToShipping} />
+            </div>
+          )}
+
+          {/* Out-of-stock-everywhere items need a pre-order decision
+              regardless of which fulfillment is picked — SHIP_FROM_STORE,
+              DELIVERY, PICKUP_DEFERRED, all need the stock to exist
+              somewhere first. */}
+          {!groupOrderMode && (
+            <div style={cartStyles.formBlock}>
+              <PreorderBanner
+                items={cart}
+                isPreorder={!!shipGroups[0].isPreorder}
+                onSplit={splitPreorderItems}
+                onWaitTogether={() => setGroupField(shipGroups[0].id, { isPreorder: true })}
+              />
+            </div>
+          )}
 
           {requiresAddress && !groupOrderMode && (
             // Default flow — unchanged from before group orders existed:
@@ -965,10 +1067,13 @@ function Cart({
               />
               {currentFulfillment.needsCourier && (
                 <ShippingInfoRow
-                  shipping={{ courierId: shipGroups[0].courierId, fee: shipGroups[0].fee }}
+                  shipping={{ courierId: shipGroups[0].courierId, fee: shipGroups[0].fee, vehicleType: shipGroups[0].vehicleType }}
                   setShipping={(patch) => setGroupField(shipGroups[0].id, patch)}
                   couriers={couriers}
                   fixedCourierId={fixedCourierId}
+                  items={cart}
+                  vehicleTypes={vehicleTypes}
+                  onSplitVehicles={(vid) => splitVehicleGroups(shipGroups[0].id, vid)}
                 />
               )}
               {currentFulfillment.needsTravelFee && (
@@ -1138,6 +1243,10 @@ function Cart({
         <GroupManagerDrawer
           open={groupDrawerOpen}
           onClose={() => setGroupDrawerOpen(false)}
+          customer={customer}
+          customers={customers}
+          setCustomer={setCustomer}
+          onAddCustomer={onAddCustomer}
           shipGroups={shipGroups}
           cart={cart}
           renderRow={renderCartRow}
@@ -1153,6 +1262,10 @@ function Cart({
           removeShipGroup={removeShipGroup}
           setGroupField={setGroupField}
           splitToBranch={splitToBranch}
+          vehicleTypes={vehicleTypes}
+          splitVehicleGroups={splitVehicleGroups}
+          splitBulkyToShipping={splitBulkyToShipping}
+          splitPreorderItems={splitPreorderItems}
         />
       )}
 
@@ -1290,10 +1403,98 @@ function FulfillmentDropdown({ options, value, onSelect, grow }) {
 // Opens a popover to pick from the saved customer list.
 // No customer attached yet — plain "add customer" button (Figma's empty
 // "Customer info" state). Opens the same customer-picker popover as the card.
-function CustomerRow({ customer, customers, onSelect }) {
+// Inline "+ เพิ่มลูกค้าใหม่" form — name + phone only (enough to attach a
+// recipient for delivery/pickup-branch groups); shows above the existing-
+// customer list inside the same popover so a walk-in can be added without
+// leaving the cart pane or closing the group-order drawer.
+function NewCustomerForm({ onCancel, onSave }) {
+  const [name, setName] = React.useState('');
+  const [phone, setPhone] = React.useState('');
+  const canSave = name.trim().length > 0;
+  return (
+    <div style={cartStyles.popForm}>
+      <div style={cartStyles.popFormField}>
+        <span style={cartStyles.popFormLabel}>ชื่อลูกค้า *</span>
+        <input
+          autoFocus
+          type="text"
+          placeholder="ชื่อ-นามสกุล"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          style={cartStyles.shipFeeInput}
+        />
+      </div>
+      <div style={cartStyles.popFormField}>
+        <span style={cartStyles.popFormLabel}>เบอร์โทร</span>
+        <input
+          type="tel"
+          placeholder="08x-xxx-xxxx"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          style={cartStyles.shipFeeInput}
+        />
+      </div>
+      <div style={cartStyles.popFormActions}>
+        <button style={cartStyles.popFormCancel} onClick={onCancel}>ยกเลิก</button>
+        <button
+          style={{ ...cartStyles.popFormSave, ...(canSave ? {} : cartStyles.popFormSaveDisabled) }}
+          disabled={!canSave}
+          onClick={() => canSave && onSave({ name, phone })}
+        >
+          บันทึก
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CustomerRow({ customer, customers, onSelect, onAddCustomer }) {
   const [open, setOpen] = React.useState(false);
+  const [adding, setAdding] = React.useState(false);
   const { anchorRef, popStyle } = usePopoverFit(open);
   const isWalkIn = customer.name === 'Walk-in customer';
+
+  const closeAll = () => { setOpen(false); setAdding(false); };
+  const handleAdd = (data) => { onAddCustomer(data); closeAll(); };
+
+  const list = (
+    <>
+      <div onClick={closeAll} style={cartStyles.popScrim} />
+      <div style={popStyle}>
+        {adding ? (
+          <>
+            <div style={cartStyles.popHd}>เพิ่มลูกค้าใหม่</div>
+            <NewCustomerForm onCancel={() => setAdding(false)} onSave={handleAdd} />
+          </>
+        ) : (
+          <>
+            <div style={cartStyles.popHd}>ลูกค้า</div>
+            {onAddCustomer && (
+              <button style={cartStyles.popAddBtn} onClick={() => setAdding(true)}>
+                <span style={cartStyles.popAddBtnIcon}><Icon name="plus" size={14} /></span>
+                เพิ่มลูกค้าใหม่
+              </button>
+            )}
+            {customers.map(c => {
+              const active = c.id === customer.id;
+              return (
+                <button key={c.id} style={cartStyles.popItem(active)} onClick={() => { onSelect(c.id); closeAll(); }}>
+                  <span style={cartStyles.popItemIcon(c.tier === 'Gold' ? 'var(--amber-500)' : 'var(--brand-500)', active)}>
+                    <Icon name="user" size={13} />
+                  </span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{c.name}</span>
+                    <span style={cartStyles.popItemSub}>{c.phone ? `${c.phone}${c.tier ? ` · ${c.tier} member` : ''}` : 'No customer attached'}</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </>
+  );
 
   if (isWalkIn) {
     return (
@@ -1303,29 +1504,7 @@ function CustomerRow({ customer, customers, onSelect }) {
           <span style={cartStyles.infoRowLabel}>เพิ่มข้อมูลลูกค้า</span>
           <span style={cartStyles.infoRowChev}><Icon name="chevR" size={20} /></span>
         </button>
-        {open && (
-          <>
-            <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
-            <div style={popStyle}>
-              <div style={cartStyles.popHd}>ลูกค้า</div>
-              {customers.map(c => {
-                const active = c.id === customer.id;
-                return (
-                  <button key={c.id} style={cartStyles.popItem(active)} onClick={() => { onSelect(c.id); setOpen(false); }}>
-                    <span style={cartStyles.popItemIcon(c.tier === 'Gold' ? 'var(--amber-500)' : 'var(--brand-500)', active)}>
-                      <Icon name="user" size={13} />
-                    </span>
-                    <span style={cartStyles.popItemBody}>
-                      <span style={cartStyles.popItemLabel}>{c.name}</span>
-                      <span style={cartStyles.popItemSub}>{c.phone ? `${c.phone}${c.tier ? ` · ${c.tier} member` : ''}` : 'No customer attached'}</span>
-                    </span>
-                    {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
+        {open && list}
       </div>
     );
   }
@@ -1348,25 +1527,7 @@ function CustomerRow({ customer, customers, onSelect }) {
 
       {open && (
         <div ref={anchorRef} style={cartStyles.popWrap}>
-          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
-          <div style={popStyle}>
-            <div style={cartStyles.popHd}>ลูกค้า</div>
-            {customers.map(c => {
-              const active = c.id === customer.id;
-              return (
-                <button key={c.id} style={cartStyles.popItem(active)} onClick={() => { onSelect(c.id); setOpen(false); }}>
-                  <span style={cartStyles.popItemIcon(c.tier === 'Gold' ? 'var(--amber-500)' : 'var(--brand-500)', active)}>
-                    <Icon name="user" size={13} />
-                  </span>
-                  <span style={cartStyles.popItemBody}>
-                    <span style={cartStyles.popItemLabel}>{c.name}</span>
-                    <span style={cartStyles.popItemSub}>{c.phone ? `${c.phone}${c.tier ? ` · ${c.tier} member` : ''}` : 'No customer attached'}</span>
-                  </span>
-                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
-                </button>
-              );
-            })}
-          </div>
+          {list}
         </div>
       )}
     </div>
@@ -1433,7 +1594,7 @@ function AddressSelector({ address, addresses, onSelect }) {
 // mandates its own logistics (Shopee → SPX, Lazada → LEX, see data.js) —
 // locks the courier to it instead of leaving the list open, since a seller
 // can't actually choose a different one for those orders.
-function ShippingInfoRow({ shipping, setShipping, couriers, fixedCourierId }) {
+function ShippingInfoRow({ shipping, setShipping, couriers, fixedCourierId, items, vehicleTypes, onSplitVehicles }) {
   const [open, setOpen] = React.useState(false);
   const { anchorRef, popStyle } = usePopoverFit(open);
   const fixedCourier = fixedCourierId ? couriers.find(c => c.id === fixedCourierId) : null;
@@ -1517,6 +1678,192 @@ function ShippingInfoRow({ shipping, setShipping, couriers, fixedCourierId }) {
           </div>
         </>
       )}
+      {!fixedCourier && courier && courier.category === 'same_day' && items && vehicleTypes && (
+        <VehicleTypeRow
+          courier={courier}
+          vehicleTypes={vehicleTypes}
+          items={items}
+          vehicleType={shipping.vehicleType}
+          onSetVehicleType={(vid) => setShipping({ ...shipping, vehicleType: vid })}
+          onSplitVehicles={onSplitVehicles}
+        />
+      )}
+    </div>
+  );
+}
+
+// Which vehicle a same-day rider shows up on — only offered once a same_day
+// courier is chosen (see ShippingInfoRow above), and only the vehicles that
+// courier actually dispatches (data.js couriers' `vehicleTypes`). A rider
+// can only strap down so many bulky items per trip (vehicleTypes'
+// `maxBulkyItems` — a motorcycle takes exactly one suitcase-sized item, a
+// van takes fifteen): once this group's bulky quantity exceeds that, the
+// warning below names how many vehicles the job actually needs and offers
+// to fan the group out into that many, one bulky item's worth each.
+function VehicleTypeRow({ courier, vehicleTypes, items, vehicleType, onSetVehicleType, onSplitVehicles }) {
+  const [open, setOpen] = React.useState(false);
+  const { anchorRef, popStyle } = usePopoverFit(open);
+  const options = vehicleTypes.filter(v => (courier.vehicleTypes || []).includes(v.id));
+  const selected = options.find(v => v.id === vehicleType) || null;
+
+  const bulkyItems = items.filter(i => window.SALE_DATA.isBulkyItem(i));
+  const bulkyQty = bulkyItems.reduce((s, i) => s + i.qty, 0);
+  const vehiclesNeeded = selected && bulkyQty > 0 ? Math.ceil(bulkyQty / selected.maxBulkyItems) : 1;
+
+  return (
+    <div ref={anchorRef} style={cartStyles.popWrap}>
+      <button style={cartStyles.infoRow(false)} onClick={() => setOpen(o => !o)}>
+        <span style={cartStyles.infoRowIcon}><Icon name={selected ? selected.icon : 'moto'} size={20} /></span>
+        <span style={cartStyles.infoRowLabel}>
+          {selected ? `พาหนะ: ${selected.label}` : 'เลือกประเภทพาหนะ'}
+        </span>
+        <span style={cartStyles.infoRowChev}><Icon name="chevR" size={20} /></span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={cartStyles.popScrim} />
+          <div style={popStyle}>
+            <div style={cartStyles.popHd}>ประเภทพาหนะ ({courier.label})</div>
+            {options.map(v => {
+              const active = v.id === vehicleType;
+              return (
+                <button
+                  key={v.id}
+                  style={cartStyles.popItem(active)}
+                  onClick={() => { onSetVehicleType(v.id); setOpen(false); }}
+                >
+                  <span style={cartStyles.popItemIcon('var(--gray-700)', active)}><Icon name={v.icon} size={13} /></span>
+                  <span style={cartStyles.popItemBody}>
+                    <span style={cartStyles.popItemLabel}>{v.label}</span>
+                    <span style={cartStyles.popItemSub}>รับสินค้าชิ้นใหญ่ได้สูงสุด {v.maxBulkyItems} ชิ้น/คัน</span>
+                  </span>
+                  {active && <span style={cartStyles.popCheck}><Icon name="check" size={12} /></span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+      {selected && vehiclesNeeded > 1 && (
+        <div style={cartStyles.stockWarnBox}>
+          <div style={cartStyles.stockWarnRow}>
+            <span style={cartStyles.stockWarnIcon}><Icon name="warn" size={14} /></span>
+            <span style={cartStyles.stockWarnText}>
+              มีสินค้าชิ้นใหญ่ {bulkyQty} ชิ้น แต่ {selected.label} รับได้คันละ {selected.maxBulkyItems} ชิ้น
+              ต้องแยกเป็น <strong>{vehiclesNeeded} คัน</strong>
+            </span>
+            {onSplitVehicles && (
+              <button
+                style={cartStyles.stockWarnAction}
+                onClick={() => onSplitVehicles(selected.id)}
+              >
+                แยกเป็น {vehiclesNeeded} คัน
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Mixed-cart fulfillment nudge — a walk-in basket with both drinks (handed
+// over on the spot) and something bulky (a coffee machine, an XL ice
+// bucket) shouldn't force the whole order into one fulfillment. Names which
+// lines are bulky and offers to split just those into their own
+// "จัดส่งจากร้าน" group, leaving the light items to go out with the customer
+// now. Only useful before a group split has already happened — once
+// group-order mode is on, the cashier is already deciding this per group.
+function BulkyItemBanner({ items, onSplit }) {
+  const bulky = items.filter(i => window.SALE_DATA.isBulkyItem(i));
+  const light = items.filter(i => !window.SALE_DATA.isBulkyItem(i) && i.cat === 'product');
+  if (bulky.length === 0 || light.length === 0) return null;
+
+  const bulkyNames = bulky.slice(0, 2).map(i => i.name).join(', ')
+    + (bulky.length > 2 ? ` และอีก ${bulky.length - 2} รายการ` : '');
+
+  return (
+    <div style={cartStyles.stockWarnBox}>
+      <div style={cartStyles.stockWarnRow}>
+        <span style={cartStyles.stockWarnIcon}><Icon name="scale" size={14} /></span>
+        <span style={cartStyles.stockWarnText}>
+          <strong>{bulkyNames}</strong> มีขนาด/น้ำหนักเกินกว่าจะรับไปพร้อมลูกค้าได้สะดวก
+          แนะนำให้แยกจัดส่งจากร้านแทน ส่วนสินค้าที่เหลือรับได้ทันที
+        </span>
+        <button
+          style={cartStyles.stockWarnAction}
+          onClick={() => onSplit(bulky.map(i => i.lineId))}
+        >
+          แยกไปจัดส่งจากร้าน
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// A product out of stock at every branch (see data.js isOutOfStockEverywhere)
+// can still be sold — as a pre-order — but the group needs to decide how:
+//  1. Only out-of-stock lines in this group → nothing to split from, one
+//     button straight into pre-order for the whole group.
+//  2. Mixed with in-stock lines → offer the choice from the spec: split the
+//     ready items into their own group to ship now (`onSplit`), or keep
+//     everything together and let the whole group wait for the pre-order
+//     (`onWaitTogether`).
+// Once the group is already marked `isPreorder`, this just confirms the
+// status instead of re-asking — the decision was already made.
+function PreorderBanner({ items, isPreorder, onSplit, onWaitTogether }) {
+  const outOfStock = items.filter(i => i.cat === 'product' && window.SALE_DATA.isOutOfStockEverywhere(i));
+  if (outOfStock.length === 0) return null;
+  const inStock = items.filter(i => !outOfStock.includes(i));
+
+  const names = outOfStock.slice(0, 2).map(i => i.name).join(', ')
+    + (outOfStock.length > 2 ? ` และอีก ${outOfStock.length - 2} รายการ` : '');
+
+  if (isPreorder) {
+    return (
+      <div style={cartStyles.stockWarnBox}>
+        <div style={cartStyles.stockWarnRow}>
+          <span style={cartStyles.stockWarnIcon}><Icon name="clock" size={14} /></span>
+          <span style={cartStyles.stockWarnText}>
+            <strong>{names}</strong> หมดสต๊อกทุกสาขา — อยู่ในสถานะ <strong>พรีออเดอร์</strong> จะจัดส่งเมื่อสินค้าครบ
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (inStock.length === 0) {
+    return (
+      <div style={cartStyles.stockWarnBox}>
+        <div style={cartStyles.stockWarnRow}>
+          <span style={cartStyles.stockWarnIcon}><Icon name="clock" size={14} /></span>
+          <span style={cartStyles.stockWarnText}>
+            <strong>{names}</strong> หมดสต๊อกทุกสาขา สามารถสั่งพรีออเดอร์ได้
+          </span>
+          <button style={cartStyles.stockWarnAction} onClick={onWaitTogether}>
+            สั่งพรีออเดอร์
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={cartStyles.stockWarnBox}>
+      <div style={cartStyles.stockWarnRow}>
+        <span style={cartStyles.stockWarnIcon}><Icon name="clock" size={14} /></span>
+        <span style={cartStyles.stockWarnText}>
+          <strong>{names}</strong> หมดสต๊อกทุกสาขา ส่วนสินค้าที่เหลือพร้อมจัดส่ง
+        </span>
+      </div>
+      <div style={cartStyles.preorderActions}>
+        <button style={cartStyles.stockWarnAction} onClick={() => onSplit(outOfStock.map(i => i.lineId))}>
+          แยกออเดอร์ จัดส่งของพร้อมก่อน
+        </button>
+        <button style={cartStyles.stockWarnActionGhost} onClick={onWaitTogether}>
+          ไม่แยก รอสินค้าครบก่อน
+        </button>
+      </div>
     </div>
   );
 }
@@ -1672,6 +2019,7 @@ function PickupStockWarning({ storeId, stores, items, onSplitToBranch }) {
 function ShipGroupCard({
   group, index, items, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId, canRemove,
   active, onActivate, isDropTarget, onRemove, onSetFulfillment, onSetAddress, onSetShipping, onSetPickupStore, onSplitToBranch,
+  vehicleTypes, onSplitVehicles, onSplitBulky, onSplitPreorder, onMarkPreorder,
 }) {
   const { needsAddress, needsCourier, needsTravelFee, needsPickupBranch } = groupFulfillmentNeeds(fulfillmentOptions, group, items);
 
@@ -1684,6 +2032,9 @@ function ShipGroupCard({
       <div style={cartStyles.shipGroupHead}>
         <span style={cartStyles.shipGroupLabel}>คำสั่งขายกลุ่ม {index + 1}</span>
         {active && <span style={cartStyles.shipGroupActiveBadge}>กำลังเพิ่มสินค้า</span>}
+        {group.isPreorder && (
+          <span style={cartStyles.preorderBadge}><Icon name="clock" size={11} /> พรีออเดอร์</span>
+        )}
         <span style={cartStyles.shipGroupCount}>{items.length} รายการ</span>
         {canRemove && (
           <button
@@ -1698,6 +2049,21 @@ function ShipGroupCard({
 
       <FulfillmentDropdown options={fulfillmentOptions} value={group.fulfillmentId} onSelect={onSetFulfillment} />
 
+      {/* Warns on the fulfillment that's currently NOT shipping — e.g.
+          "รับทันที" — since that's the one that can't actually hand over a
+          bulky item conveniently. Once the group is already on a courier
+          fulfillment there's nothing left to suggest splitting out of. */}
+      {!needsCourier && (
+        <BulkyItemBanner items={items} onSplit={onSplitBulky} />
+      )}
+
+      <PreorderBanner
+        items={items}
+        isPreorder={!!group.isPreorder}
+        onSplit={onSplitPreorder}
+        onWaitTogether={onMarkPreorder}
+      />
+
       {needsAddress && (
         <AddressSelector
           address={addresses.find(a => a.id === group.addressId) || null}
@@ -1708,10 +2074,13 @@ function ShipGroupCard({
 
       {needsCourier && (
         <ShippingInfoRow
-          shipping={{ courierId: group.courierId, fee: group.fee }}
+          shipping={{ courierId: group.courierId, fee: group.fee, vehicleType: group.vehicleType }}
           setShipping={onSetShipping}
           couriers={couriers}
           fixedCourierId={fixedCourierId}
+          items={items}
+          vehicleTypes={vehicleTypes}
+          onSplitVehicles={(vid) => onSplitVehicles(group.id, vid)}
         />
       )}
 
@@ -1772,6 +2141,9 @@ function ShipGroupSummaryCard({ group, index, items, couriers, stores, fulfillme
       <div style={cartStyles.shipGroupSummaryBadges}>
         <span style={cartStyles.shipGroupSummaryBadge}>{items.length} รายการ</span>
         <span style={cartStyles.shipGroupFulfillBadge}>{fulfillment.label}</span>
+        {group.isPreorder && (
+          <span style={cartStyles.preorderBadge}><Icon name="clock" size={11} /> พรีออเดอร์</span>
+        )}
       </div>
 
       {needsCourier && (
@@ -1806,8 +2178,10 @@ function ShipGroupSummaryCard({ group, index, items, couriers, stores, fulfillme
 // products into it", since the product grid needs to stay clickable while
 // this is open.
 function GroupManagerDrawer({
-  open, onClose, shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId,
+  open, onClose, customer, customers, setCustomer, onAddCustomer,
+  shipGroups, cart, renderRow, addresses, couriers, stores, fulfillmentOptions, fixedCourierId,
   activeGroupId, setActiveGroupId, dragOverGroupId, addShipGroup, removeShipGroup, setGroupField, splitToBranch,
+  vehicleTypes, splitVehicleGroups, splitBulkyToShipping, splitPreorderItems,
 }) {
   // Mounted a beat longer than `open` so the close transition can play
   // before the drawer leaves the DOM — otherwise it would just vanish.
@@ -1843,6 +2217,14 @@ function GroupManagerDrawer({
         </button>
       </div>
       <div className="scroll-y" style={cartStyles.drawerBody}>
+        {/* Every group ships/pickups for the same customer — one selector
+            here (existing or brand-new) instead of per-group, so switching
+            groups never means hunting back to the collapsed cart header for
+            it. */}
+        <div style={cartStyles.formBlock}>
+          <span style={cartStyles.formLabel}>ข้อมูลลูกค้า</span>
+          <CustomerRow customer={customer} customers={customers} onSelect={setCustomer} onAddCustomer={onAddCustomer} />
+        </div>
         {shipGroups.map((g, gi) => (
           <ShipGroupCard
             key={g.id}
@@ -1865,6 +2247,11 @@ function GroupManagerDrawer({
             onSetShipping={(patch) => setGroupField(g.id, patch)}
             onSetPickupStore={(sid) => setGroupField(g.id, { pickupStoreId: sid })}
             onSplitToBranch={splitToBranch}
+            vehicleTypes={vehicleTypes}
+            onSplitVehicles={splitVehicleGroups}
+            onSplitBulky={splitBulkyToShipping}
+            onSplitPreorder={splitPreorderItems}
+            onMarkPreorder={() => setGroupField(g.id, { isPreorder: true })}
           />
         ))}
         {/* Adding a group here (bottom) rather than at the top means it

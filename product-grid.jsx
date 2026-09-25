@@ -132,13 +132,13 @@ const pgStyles = {
     fontWeight: 700, fontSize: 22, letterSpacing: '.06em',
     textShadow: '0 1px 2px rgba(0,0,0,.2)',
   },
-  stockBadge: (low, oos) => ({
+  stockBadge: (low, preorder, localOut) => ({
     position: 'absolute', top: 6, right: 6,
     fontSize: 11, fontWeight: 700,
     padding: '2px 8px',
     borderRadius: 999,
-    background: oos ? 'var(--rose-500)' : low ? 'var(--amber-500)' : 'rgba(255,255,255,.92)',
-    color: oos || low ? '#fff' : 'var(--text-secondary)',
+    background: preorder ? 'var(--amber-500)' : localOut ? 'var(--sky-500, #0BA5EC)' : low ? 'var(--amber-500)' : 'rgba(255,255,255,.92)',
+    color: preorder || localOut || low ? '#fff' : 'var(--text-secondary)',
     backdropFilter: 'blur(4px)',
   }),
   name: {
@@ -180,24 +180,34 @@ function ColsGlyph({ n, active }) {
   );
 }
 
-function ProductCard({ p, onAdd }) {
-  const oos = p.stock === 0;
-  const low = !oos && p.stock <= 6;
+function ProductCard({ p, storeId, onAdd }) {
+  // The grid still shows THIS branch's own shelf count (stockByStore[storeId],
+  // same number `stock` always meant for s01) — that part was right. What
+  // changed is what a 0 there means: never a hard block. Checked against
+  // wider stock instead of just refused outright:
+  //  - other branches or the central warehouse still have it → still an
+  //    ordinary sale, just fulfilled via pickup-elsewhere or delivery (see
+  //    PickupStockWarning in cart.jsx for the pickup-elsewhere prompt).
+  //  - NOTHING anywhere has it (see isOutOfStockEverywhere) → pre-order,
+  //    badged here so it's clear before it's even in the cart.
+  const localStock = p.stockByStore ? (p.stockByStore[storeId] ?? p.stock) : p.stock;
+  const preorder = p.cat === 'product' && window.SALE_DATA.isOutOfStockEverywhere(p);
+  const localOut = !preorder && localStock === 0;
+  const low = !preorder && !localOut && localStock <= 6;
   const initials = p.name.split(' ').slice(0, 2).map(s => s[0]).join('').toUpperCase();
   return (
     <button
-      style={pgStyles.card(oos)}
-      disabled={oos}
-      onClick={() => !oos && onAdd(p)}
-      onMouseEnter={(e) => { if (!oos) { e.currentTarget.style.borderColor = 'var(--brand-300)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; } }}
+      style={pgStyles.card(false)}
+      onClick={() => onAdd(p)}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--brand-300)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
       onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--stroke)'; e.currentTarget.style.boxShadow = 'none'; }}
-      onMouseDown={(e) => { if (!oos) e.currentTarget.style.transform = 'scale(0.985)'; }}
+      onMouseDown={(e) => { e.currentTarget.style.transform = 'scale(0.985)'; }}
       onMouseUp={(e)   => { e.currentTarget.style.transform = 'scale(1)'; }}
     >
       <div style={pgStyles.swatch(p.swatch)}>
         <span style={pgStyles.initials}>{initials}</span>
-        <span style={pgStyles.stockBadge(low, oos)}>
-          {oos ? 'Out' : low ? `Low · ${p.stock}` : p.stock}
+        <span style={pgStyles.stockBadge(low, preorder, localOut)}>
+          {preorder ? 'Preorder' : localOut ? 'สาขาอื่นมี' : low ? `Low · ${localStock}` : localStock}
         </span>
       </div>
       <span style={pgStyles.name}>{p.name}</span>
@@ -209,7 +219,7 @@ function ProductCard({ p, onAdd }) {
   );
 }
 
-function ProductGrid({ products, categories, onAdd }) {
+function ProductGrid({ products, categories, storeId, onAdd }) {
   const [q, setQ] = React.useState('');
   const [cat, setCat] = React.useState('all');
   const [cols, setCols] = React.useState(4);
@@ -277,7 +287,7 @@ function ProductGrid({ products, categories, onAdd }) {
             <div style={{ fontSize: 'var(--fs-caption)' }}>Try a different keyword or scan a barcode.</div>
           </div>
         ) : (
-          filtered.map(p => <ProductCard key={p.id} p={p} onAdd={onAdd} />)
+          filtered.map(p => <ProductCard key={p.id} p={p} storeId={storeId} onAdd={onAdd} />)
         )}
       </div>
     </div>

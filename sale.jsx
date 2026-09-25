@@ -494,6 +494,10 @@ function App() {
   const [payment, setPayment]         = React.useState('cash');
   const [phone, setPhone]             = React.useState('');
   const [customer, setCustomerId]     = React.useState('c001');
+  // Walk-in customers who need delivery (from-store or standard courier)
+  // often aren't members yet — D.customers is the static seed list, so new
+  // walk-ins are appended here rather than mutating it.
+  const [customerList, setCustomerList] = React.useState(D.customers);
   // Shipping is always N groups (N >= 1, starting at 1) — each with its own
   // address + courier + fee. Every cart line belongs to exactly one group
   // via `groupId`. `groupOrderMode` is off by default: the cashier sees the
@@ -504,7 +508,7 @@ function App() {
   // fee per group. Dropping back to 1 group exits group mode automatically,
   // so the old single-destination flow is always just a removal away.
   const [shipGroups, setShipGroups]   = React.useState([
-    { id: 'g1', addressId: null, courierId: null, fee: '', pickupStoreId: storeId, fulfillmentId: D.channels[0].fulfillment[0].id },
+    { id: 'g1', addressId: null, courierId: null, fee: '', pickupStoreId: storeId, fulfillmentId: D.channels[0].fulfillment[0].id, vehicleType: null },
   ]);
   const [groupOrderMode, setGroupOrderMode] = React.useState(false);
   // Which group newly-tapped products land in. Picking a product from the
@@ -514,16 +518,28 @@ function App() {
   const [activeGroupId, setActiveGroupId] = React.useState('g1');
   const onChangeCustomer = (cid) => {
     setCustomerId(cid);
-    const cust = D.customers.find(c => c.id === cid);
+    const cust = customerList.find(c => c.id === cid);
     const defaultAddressId = cust.addresses[0] ? cust.addresses[0].id : null;
     setShipGroups(prev => prev.map(g => ({ ...g, addressId: defaultAddressId })));
+  };
+  // Lets a cashier attach a brand-new walk-in's details (name/phone) on the
+  // spot — needed the moment a walk-in needs delivery (from-store pickup
+  // group or a standard courier) since those require a recipient, and
+  // there's no reason to send the cashier away from the cart/group drawer
+  // to do it. Immediately selects the new customer, same as picking an
+  // existing one.
+  const addCustomer = ({ name, phone }) => {
+    const newId = `c_${Date.now().toString(36)}`;
+    const newCustomer = { id: newId, name: name.trim(), phone: phone.trim(), tier: null, addresses: [] };
+    setCustomerList(prev => [...prev, newCustomer]);
+    onChangeCustomer(newId);
   };
   const addShipGroup = () => {
     const ch = D.channels.find(c => c.id === channel);
     const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
     setShipGroups(prev => [
       ...prev,
-      { id: newId, addressId: null, courierId: null, fee: '', pickupStoreId: storeId, fulfillmentId: ch.fulfillment[0].id },
+      { id: newId, addressId: null, courierId: null, fee: '', pickupStoreId: storeId, fulfillmentId: ch.fulfillment[0].id, vehicleType: null },
     ]);
     setActiveGroupId(newId);
   };
@@ -553,6 +569,15 @@ function App() {
   const suggestFulfillmentId = (ch, items) => {
     if (items.some(i => i.cat === 'service')) return 'ON_SITE';
     if (items.length > 0 && items.every(i => i.cat === 'digital')) return 'DIGITAL';
+    // A pre-order group has nothing to hand over today — "รับทันที" makes
+    // no sense, and "รับภายหลัง" assumes a branch will have it to collect,
+    // which is exactly what pre-order means it doesn't. Default to whichever
+    // fulfillment ships to the customer instead (same courier-first instinct
+    // as splitBulkyToShipping's SHIP_FROM_STORE preference), since that's
+    // the only option that still works once stock arrives.
+    if (items.length > 0 && items.every(i => i.cat === 'product' && D.isOutOfStockEverywhere(i))) {
+      return (ch.fulfillment.find(f => f.needsCourier) || ch.fulfillment[0]).id;
+    }
     return ch.fulfillment[0].id;
   };
   // Drag-and-drop between groups (in the drawer) — blocked if it would mix
@@ -571,6 +596,17 @@ function App() {
       if ((movingIsDigital && targetHasOther) || (!movingIsDigital && targetHasDigital)) {
         return prev; // would mix digital with physical/service — reject
       }
+      // Same rule as addToCart's pickGroupForItem — a pre-order group only
+      // ever holds pre-order lines, so dragging one onto a group with
+      // in-stock items (or an in-stock item onto a pre-order group) would
+      // silently create the exact mixed group the pre-order flow exists to
+      // avoid.
+      const targetGroup = shipGroups.find(g => g.id === groupId);
+      const movingIsPreorder = D.isOutOfStockEverywhere(movingItem);
+      if ((movingIsPreorder && targetItems.length > 0 && !targetGroup?.isPreorder)
+        || (!movingIsPreorder && targetGroup?.isPreorder)) {
+        return prev; // would mix pre-order with ready-to-ship items — reject
+      }
       const wasEmpty = targetItems.length === 0;
       const next = prev.map(i => i.lineId === lineId ? { ...i, groupId } : i);
       // A service item dropped into a group always makes it an on-site
@@ -581,6 +617,9 @@ function App() {
       if (forced) {
         setShipGroups(gs => gs.map(g => g.id === groupId ? { ...g, fulfillmentId: forced } : g));
         if (!groupOrderMode) setFulfillment(forced);
+      }
+      if (wasEmpty && movingIsPreorder) {
+        setShipGroups(gs => gs.map(g => g.id === groupId ? { ...g, isPreorder: true } : g));
       }
       return next;
     });
@@ -596,11 +635,106 @@ function App() {
     const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
     setShipGroups(gs => [...gs, {
       id: newId, addressId: null, courierId: null, fee: '', pickupStoreId,
-      fulfillmentId: 'PICKUP_DEFERRED',
+      fulfillmentId: 'PICKUP_DEFERRED', vehicleType: null,
     }]);
     setCart(prev => prev.map(i => i.lineId === lineId ? { ...i, groupId: newId } : i));
     setGroupOrderMode(true);
     setActiveGroupId(newId);
+  };
+  // Weight/size-aware fulfillment suggestion (see BulkyItemBanner in
+  // cart.jsx) — a walk-in cart mixing drinks with something like a coffee
+  // machine or an XL ice bucket shouldn't force the whole order down one
+  // path: the light items can go out the door with the customer right now,
+  // the bulky ones are better off shipped from the store later. Pulls just
+  // the bulky lines out into a new SHIP_FROM_STORE group, same shape as
+  // splitToBranch above but keyed by "these lineIds", not "this one line".
+  const splitBulkyToShipping = (lineIds) => {
+    const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
+    const ch = D.channels.find(c => c.id === channel);
+    const bulkyFulfillmentId = (ch.fulfillment.find(f => f.id === 'SHIP_FROM_STORE') || ch.fulfillment.find(f => f.needsCourier) || ch.fulfillment[0]).id;
+    setShipGroups(gs => [...gs, {
+      id: newId, addressId: null, courierId: null, fee: '', pickupStoreId: storeId,
+      fulfillmentId: bulkyFulfillmentId, vehicleType: null,
+    }]);
+    setCart(prev => prev.map(i => lineIds.includes(i.lineId) ? { ...i, groupId: newId } : i));
+    setGroupOrderMode(true);
+    setActiveGroupId(newId);
+  };
+  // Pre-order case 2.1 "แยกออเดอร์" (see cart.jsx PreorderBanner) — pulls
+  // just the lines that are out of stock at every branch into their own
+  // group marked `isPreorder`, so the rest of the order (already in stock)
+  // ships on the normal timeline instead of waiting on the restock too.
+  // Case 1 (the whole group is already just the out-of-stock item) and case
+  // 2.2 "ไม่แยก" don't need a new group at all — they just flip `isPreorder`
+  // on the existing one via setGroupField, same as any other group field.
+  const splitPreorderItems = (lineIds) => {
+    const newId = `g${shipGroups.length + 1}_${Date.now().toString(36)}`;
+    const sourceGroup = shipGroups.find(g => cart.some(i => lineIds.includes(i.lineId) && i.groupId === g.id)) || shipGroups[0];
+    setShipGroups(gs => [...gs, {
+      id: newId, addressId: sourceGroup.addressId, courierId: sourceGroup.courierId, fee: '',
+      pickupStoreId: sourceGroup.pickupStoreId, fulfillmentId: sourceGroup.fulfillmentId, vehicleType: null,
+      isPreorder: true,
+    }]);
+    setCart(prev => prev.map(i => lineIds.includes(i.lineId) ? { ...i, groupId: newId } : i));
+    setGroupOrderMode(true);
+    setActiveGroupId(newId);
+  };
+  // Same-day riders can only carry so many bulky items each (see
+  // data.js vehicleTypes' maxBulkyItems — a motorcycle takes one suitcase,
+  // not four). Once a group's bulky quantity exceeds the chosen vehicle's
+  // capacity, this fans it out into N groups — the original plus N-1 new
+  // ones, all cloned with the same courier/vehicle/address — and redistributes
+  // just the bulky lines across them so each group stays within capacity.
+  // Light items in the original group are left alone; they ride along with
+  // vehicle #1.
+  const splitVehicleGroups = (groupId, vehicleTypeId) => {
+    const vt = D.vehicleTypes.find(v => v.id === vehicleTypeId);
+    const group = shipGroups.find(g => g.id === groupId);
+    if (!vt || !group) return;
+    setCart(prevCart => {
+      const groupItems = prevCart.filter(i => i.groupId === groupId);
+      const bulkyItems = groupItems.filter(D.isBulkyItem);
+      const totalBulkyQty = bulkyItems.reduce((s, i) => s + i.qty, 0);
+      const vehiclesNeeded = Math.ceil(totalBulkyQty / vt.maxBulkyItems);
+      if (vehiclesNeeded <= 1) return prevCart;
+
+      const newGroups = [];
+      for (let v = 1; v < vehiclesNeeded; v++) {
+        newGroups.push({
+          id: `${groupId}_v${v + 1}_${Date.now().toString(36)}${v}`,
+          addressId: group.addressId, courierId: group.courierId, fee: group.fee,
+          pickupStoreId: group.pickupStoreId, fulfillmentId: group.fulfillmentId,
+          vehicleType: vehicleTypeId,
+        });
+      }
+      setShipGroups(gs => [
+        ...gs.map(g => g.id === groupId ? { ...g, vehicleType: vehicleTypeId } : g),
+        ...newGroups,
+      ]);
+      setGroupOrderMode(true);
+
+      const allGroupIds = [groupId, ...newGroups.map(g => g.id)];
+      const remainingCapacity = allGroupIds.map(() => vt.maxBulkyItems);
+      let nextCart = prevCart;
+      bulkyItems.forEach(item => {
+        let qtyLeft = item.qty;
+        let firstAssignment = true;
+        for (let gi = 0; gi < allGroupIds.length && qtyLeft > 0; gi++) {
+          if (remainingCapacity[gi] <= 0) continue;
+          const take = Math.min(qtyLeft, remainingCapacity[gi]);
+          remainingCapacity[gi] -= take;
+          qtyLeft -= take;
+          const destGroupId = allGroupIds[gi];
+          if (firstAssignment) {
+            nextCart = nextCart.map(i => i.lineId === item.lineId ? { ...i, qty: take, groupId: destGroupId } : i);
+            firstAssignment = false;
+          } else {
+            nextCart = [...nextCart, { ...item, lineId: `${item.lineId}_${destGroupId}`, qty: take, groupId: destGroupId }];
+          }
+        }
+      });
+      return nextCart;
+    });
   };
   // Outside group-order mode there's exactly one group (shipGroups[0]), and
   // the header's fulfillment dropdown was only ever writing the separate
@@ -666,6 +800,14 @@ function App() {
   // it takes (the no-mixing rule holds even if the cashier never opted in).
   const pickGroupForItem = (p, cur) => {
     const isDigital = p.cat === 'digital';
+    // Out of stock at every branch (see data.js isOutOfStockEverywhere) —
+    // picking it up still adds a normal cart line (just badged "พรีออเดอร์",
+    // see cart.jsx renderCartRow), but it can't ride along in a group with
+    // in-stock items since that group would ship/pick-up today. It always
+    // lands in a group made up of nothing but other pre-order items, same
+    // way a digital item always lands in an all-digital group — created
+    // fresh (and flagged `isPreorder`) the first time one shows up.
+    const isPreorderItem = p.cat === 'product' && D.isOutOfStockEverywhere(p);
     const itemsOf = (gid) => cur.filter(i => i.groupId === gid);
     const isAllDigital = (g) => {
       const items = itemsOf(g.id);
@@ -678,9 +820,14 @@ function App() {
       if (existing) return existing.id;
       return null; // caller creates a fresh group
     }
+    if (isPreorderItem) {
+      const existing = shipGroups.find(g => g.isPreorder && itemsOf(g.id).length > 0) || shipGroups.find(isEmpty);
+      if (existing) return existing.id;
+      return null; // caller creates a fresh pre-order group
+    }
     const target = shipGroups.find(g => g.id === activeGroupId) || shipGroups[0];
-    if (!isAllDigital(target)) return target.id;
-    const alt = shipGroups.find(g => !isAllDigital(g));
+    if (!isAllDigital(target) && !target.isPreorder) return target.id;
+    const alt = shipGroups.find(g => !isAllDigital(g) && !g.isPreorder);
     return alt ? alt.id : null; // caller creates a fresh group
   };
 
@@ -692,6 +839,7 @@ function App() {
   // is only bumped when the product already has a line in THAT group, not
   // just anywhere in the cart.
   const addToCart = (p) => {
+    const isPreorderItem = p.cat === 'product' && D.isOutOfStockEverywhere(p);
     setCart(prev => {
       let groupId = pickGroupForItem(p, prev);
       let groupIsNew = false;
@@ -701,6 +849,7 @@ function App() {
         setShipGroups(gs => [...gs, {
           id: newId, addressId: null, courierId: null, fee: '', pickupStoreId: storeId,
           fulfillmentId: suggestFulfillmentId(ch, [p]),
+          ...(isPreorderItem ? { isPreorder: true } : {}),
         }]);
         setGroupOrderMode(true);
         setActiveGroupId(newId);
@@ -733,6 +882,13 @@ function App() {
           // instead of leaving it stuck on whatever was picked before.
           if (!groupOrderMode) setFulfillment(forced);
         }
+        // Reusing an existing-but-empty group (pickGroupForItem's `isEmpty`
+        // fallback) — e.g. the very first item on a fresh order — doesn't
+        // go through the "create a group" branch above, so it needs its
+        // own `isPreorder` flag set here instead.
+        if (wasEmpty && isPreorderItem) {
+          setShipGroups(gs => gs.map(g => g.id === groupId ? { ...g, isPreorder: true } : g));
+        }
       }
       const lineId = `${p.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
       return [...prev, { ...p, qty: 1, groupId, lineId }];
@@ -745,7 +901,7 @@ function App() {
   const removeItem = (lineId) => setCart(prev => prev.filter(i => i.lineId !== lineId));
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-  const currentCustomer = D.customers.find(c => c.id === customer);
+  const currentCustomer = customerList.find(c => c.id === customer);
   const memberDiscount = currentCustomer.tier === 'Gold' && subtotal > 0 ? Math.round(subtotal * 0.05) : 0;
   const manualDiscountAmount = manualDiscount?.amount || 0;
   const discount = memberDiscount + manualDiscountAmount;
@@ -769,8 +925,9 @@ function App() {
     setQty,
     removeItem,
     customer: currentCustomer,
-    customers: D.customers,
+    customers: customerList,
     setCustomer: onChangeCustomer,
+    onAddCustomer: addCustomer,
     addresses: currentCustomer.addresses,
     stores: D.stores,
     phone,
@@ -798,6 +955,10 @@ function App() {
     setGroupField,
     setItemGroup,
     splitToBranch,
+    splitBulkyToShipping,
+    splitPreorderItems,
+    splitVehicleGroups,
+    vehicleTypes: D.vehicleTypes,
     activeGroupId,
     setActiveGroupId,
   };
@@ -917,6 +1078,7 @@ function App() {
           <ProductGrid
             products={D.products}
             categories={D.categories}
+            storeId={storeId}
             onAdd={addToCart}
           />
           <Cart {...cartProps} />
